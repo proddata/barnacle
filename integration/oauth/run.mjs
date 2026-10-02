@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -47,6 +47,8 @@ function jwt(privateKey, overrides = {}) {
 }
 
 const fixture = await mkdtemp(join(tmpdir(), 'hermit-oauth-'));
+// The PostgreSQL container must traverse this host directory to read pg_hba.conf.
+await chmod(fixture, 0o711);
 const source = join(fixture, 'validator-source');
 const port = await freePort();
 const image = process.env.HERMIT_OAUTH_VALIDATOR_IMAGE || `hermit-pg-oauth-validator:${validatorRef.slice(0, 12)}`;

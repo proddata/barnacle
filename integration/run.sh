@@ -18,7 +18,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-go build -o "$binary" .
+go build -buildvcs=false -o "$binary" .
 "$binary" >"$log" 2>&1 &
 server_pid=$!
 
