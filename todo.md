@@ -1,6 +1,6 @@
 # Hermit compatibility TODO
 
-This is a gap check for Hermit as a **single PostgreSQL instance** proxy, compared with `@neondatabase/serverless` 1.2.0 and Neon's SQL-over-HTTP/WebSocket implementation. Checked 2026-10-02. Items below describe missing behavior; a passing smoke test does not imply full protocol parity.
+This is a gap check for Hermit as a PostgreSQL proxy with fixed routing by default and an optional exact-address allowlist, compared with `@neondatabase/serverless` 1.2.0 and Neon's SQL-over-HTTP/WebSocket implementation. Checked 2026-10-02. Items below describe missing behavior; a passing smoke test does not imply full protocol parity.
 
 ## Working baseline
 
@@ -12,6 +12,7 @@ This is a gap check for Hermit as a **single PostgreSQL instance** proxy, compar
 | `GET /v2` and `/v1` WebSocket | Binary PostgreSQL wire tunnel; SCRAM login tested | `integration/neon.test.mjs`, `ws_test.go` |
 | `OPTIONS /sql` | Browser preflight for configured origin | `sql.go` |
 | `GET /healthz` | Process liveness | `main.go` |
+| Optional upstream routing | HTTP connection-string host and WebSocket `?address=` select an exact allowed address | `routing_test.go`, `integration/routing.mjs` |
 
 ## P0 — close gaps in the advertised API
 
@@ -37,7 +38,7 @@ This is a gap check for Hermit as a **single PostgreSQL instance** proxy, compar
 
 ## Deliberately outside the current target
 
-Neon platform routing, compute wake-up, `Neon-Pool-Opt-In`, `Neon-Request-Id`, REST broker paths, console redirect auth, and multi-tenant endpoint management are not needed for one fixed PostgreSQL upstream. Add them only if Hermit's deployment model changes. The serverless driver's default Neon URLs still need explicit `fetchEndpoint` and `wsProxy` overrides for Hermit.
+Neon platform routing, compute wake-up, `Neon-Pool-Opt-In`, `Neon-Request-Id`, REST broker paths, console redirect auth, and multi-tenant endpoint management remain outside this target. Hermit's address allowlist is operator-configured and does not discover Neon endpoints. The serverless driver's default Neon URLs still need explicit `fetchEndpoint` and `wsProxy` overrides for Hermit.
 
 ## Sources inspected
 

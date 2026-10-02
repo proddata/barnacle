@@ -15,6 +15,7 @@ import (
 
 type config struct {
 	listen, pgAddr, pgDatabase, pgUser, pgPassword, pgSSLMode, allowedOrigin string
+	pgAllowedAddrs                                                           map[string]struct{}
 	consoleEnabled                                                           bool
 	queryTimeout                                                             time.Duration
 	upstreamSlots                                                            chan struct{}
@@ -61,9 +62,26 @@ func main() {
 		slog.Error("invalid HERMIT_HTTP_MAX_RESPONSE_MIB")
 		os.Exit(1)
 	}
+	allowedAddrs, err := parseAllowedPGAddrs(os.Getenv("HERMIT_PG_ALLOWED_ADDRS"))
+	if err != nil {
+		slog.Error("invalid PostgreSQL routing configuration", "error", err)
+		os.Exit(1)
+	}
+	defaultPGAddr := os.Getenv("HERMIT_PG_ADDR")
+	if defaultPGAddr == "" && len(allowedAddrs) == 0 {
+		defaultPGAddr = "127.0.0.1:5432"
+	}
+	if defaultPGAddr != "" {
+		defaultPGAddr, err = canonicalPGAddr(defaultPGAddr)
+		if err != nil {
+			slog.Error("invalid HERMIT_PG_ADDR", "error", err)
+			os.Exit(1)
+		}
+	}
 	cfg := config{
 		listen:               env("HERMIT_LISTEN", ":8080"),
-		pgAddr:               env("HERMIT_PG_ADDR", "127.0.0.1:5432"),
+		pgAddr:               defaultPGAddr,
+		pgAllowedAddrs:       allowedAddrs,
 		pgDatabase:           env("HERMIT_PG_DATABASE", "postgres"),
 		pgUser:               env("HERMIT_PG_USER", "postgres"),
 		pgPassword:           os.Getenv("HERMIT_PG_PASSWORD"),
@@ -76,10 +94,6 @@ func main() {
 		maxHTTPRowBytes:      int64(maxHTTPRowMiB) << 20,
 		maxHTTPBufferedBytes: int64(maxHTTPBufferedMiB) << 20,
 		maxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
-	}
-	if !strings.Contains(cfg.pgAddr, ":") {
-		slog.Error("HERMIT_PG_ADDR must be host:port")
-		os.Exit(1)
 	}
 	issuer := os.Getenv("HERMIT_OIDC_ISSUER")
 	audience := os.Getenv("HERMIT_OIDC_AUDIENCE")

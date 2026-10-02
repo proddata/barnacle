@@ -16,7 +16,8 @@ services:
     build: .
     environment:
       HERMIT_LISTEN: ':8080'
-      HERMIT_PG_ADDR: postgres:5432
+      HERMIT_PG_ADDR: '${HERMIT_PG_ADDR-postgres:5432}'
+      HERMIT_PG_ALLOWED_ADDRS: '${HERMIT_PG_ALLOWED_ADDRS:-}'
       HERMIT_PG_USER: hermit
       HERMIT_PG_DATABASE: hermit
       HERMIT_MAX_CONNECTIONS: '32'

@@ -87,13 +87,20 @@ func (c config) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 		}
 	}
 	if raw == "" {
+		if c.pgAddr == "" {
+			return nil, errors.New("Neon-Connection-String required without HERMIT_PG_ADDR")
+		}
 		raw = (&url.URL{Scheme: "postgres", User: url.UserPassword(c.pgUser, c.pgPassword), Host: c.pgAddr, Path: "/" + c.pgDatabase}).String()
+	}
+	upstream, err := c.httpUpstreamAddr(r.Header.Get("Neon-Connection-String"))
+	if err != nil {
+		return nil, err
 	}
 	pgcfg, err := pgx.ParseConfig(raw)
 	if err != nil {
 		return nil, fmt.Errorf("invalid connection string: %w", err)
 	}
-	host, portString, err := net.SplitHostPort(c.pgAddr)
+	host, portString, err := net.SplitHostPort(upstream)
 	if err != nil {
 		return nil, err
 	}

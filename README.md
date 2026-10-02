@@ -39,7 +39,7 @@ curl -sS http://localhost:8080/sql \
   -d '{"query":"select $1::int as answer","params":[42]}'
 ```
 
-Expected `rows`: `[{"answer":42}]`. The hostname in the connection string is never used as a network destination: Hermit always connects to `HERMIT_PG_ADDR` (`postgres:5432` in Compose).
+Expected `rows`: `[{"answer":42}]`. By default, Hermit always connects to `HERMIT_PG_ADDR` (`postgres:5432` in Compose), regardless of the hostname in the connection string.
 
 ## Use the Neon serverless driver
 
@@ -110,7 +110,7 @@ The HTTP response has `rows`, `fields`, `command`, `rowCount`, and `rowAsArray`;
 
 `POST /sql` compresses JSON responses of 1 KiB or more when the client sends `Accept-Encoding: gzip`. Small responses stay plain. The Neon driver uses `fetch()`, so browser and Node HTTP stacks handle response decompression; the driver itself does not set a gzip option. Request bodies remain plain JSON.
 
-Hermit accepts up to 1 MiB per HTTP request and up to 100 queries per batch. HTTP queries have a 30 second default timeout. Single-query HTTP responses stream JSON rows; batches and plain JSON responses involving custom PostgreSQL types use a 4 MiB buffered-result budget that counts field bytes and row overhead. By default, one HTTP row may contain up to 8 MiB of PostgreSQL field data and one response up to 128 MiB of uncompressed JSON. pgx's wire reader rejects oversized PostgreSQL messages before allocating their bodies. A result over a limit returns HTTP 413 if detected before headers are sent; once streaming has begun, the JSON response is interrupted. Use the WebSocket path for sessions and very large individual rows. The WebSocket relay does not parse SQL and ignores `?address=` to keep the upstream fixed.
+Hermit accepts up to 1 MiB per HTTP request and up to 100 queries per batch. HTTP queries have a 30 second default timeout. Single-query HTTP responses stream JSON rows; batches and plain JSON responses involving custom PostgreSQL types use a 4 MiB buffered-result budget that counts field bytes and row overhead. By default, one HTTP row may contain up to 8 MiB of PostgreSQL field data and one response up to 128 MiB of uncompressed JSON. pgx's wire reader rejects oversized PostgreSQL messages before allocating their bodies. A result over a limit returns HTTP 413 if detected before headers are sent; once streaming has begun, the JSON response is interrupted. Use the WebSocket path for sessions and very large individual rows. The WebSocket relay does not parse SQL. Its upstream address is fixed by default; optional routing can use the driver's `?address=host:port` parameter.
 
 Streaming lets Hermit avoid holding a whole result, while the Neon driver's `neon()` API still parses the complete JSON response before returning rows. If PostgreSQL fails after some rows have been sent, Hermit cannot change the HTTP status; the client sees an incomplete JSON response. Errors detected before the first row retain a structured PostgreSQL error response.
 
@@ -118,10 +118,32 @@ Streaming lets Hermit avoid holding a whole result, while the Neon driver's `neo
 
 Set `HERMIT_PG_ADDR` to the nearby server, keep the Hermit listener private, and let HAProxy terminate public TLS. The repository includes a starting [HAProxy configuration](haproxy.cfg) with WebSocket-friendly timeouts and a health check. HAProxy should set `X-Forwarded-Proto: https` when serving the console through TLS.
 
+### Route to more than one PostgreSQL address
+
+Set `HERMIT_PG_ALLOWED_ADDRS` to an exact, comma-separated list of destinations, such as `db-a.internal:5432,db-b.internal:5432`. This enables request-based routing. HTTP takes the host and port from `Neon-Connection-String` (port 5432 when omitted); WebSocket takes `?address=host:port`, which the Neon driver adds when `neonConfig.wsProxy` is a string. Only listed addresses are accepted. A request for any other address fails; Hermit never silently sends it to the default database.
+
+`HERMIT_PG_ADDR` becomes an optional fallback for requests without an address. If it is unset, such requests fail. The fallback is configured by the operator and does not need to appear in the allowlist. The shipped Compose configuration keeps fixed routing for the simple one-database setup.
+
+```sh
+HERMIT_PG_ALLOWED_ADDRS='db-a.internal:5432,db-b.internal:5432' \
+HERMIT_PG_SSLMODE=require \
+./hermit
+```
+
+For both transports, direct the driver to Hermit while retaining each database's own host in its connection string:
+
+```js
+neonConfig.fetchEndpoint = 'https://hermit.example.com/sql';
+neonConfig.wsProxy = 'hermit.example.com/v2'; // string form sends ?address=host:port
+```
+
+Allow only database addresses you control. Hermit resolves the listed hostnames when connecting, so keep their DNS under your control too. HTTP upstream TLS uses `HERMIT_PG_SSLMODE=require`; WebSocket clients must request PostgreSQL-native TLS themselves when the upstream network requires encryption.
+
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `HERMIT_LISTEN` | `:8080` | HTTP and WebSocket listen address |
-| `HERMIT_PG_ADDR` | `127.0.0.1:5432` | **Only** PostgreSQL network destination |
+| `HERMIT_PG_ADDR` | `127.0.0.1:5432` in fixed mode; unset in routing mode | Fixed destination, or optional fallback when allowlisting is enabled |
+| `HERMIT_PG_ALLOWED_ADDRS` | empty | Enable request-based routing to these exact `host:port` destinations |
 | `HERMIT_PG_USER` | `postgres` | Default user for bearer HTTP requests |
 | `HERMIT_PG_DATABASE` | `postgres` | Default database for bearer HTTP requests |
 | `HERMIT_PG_SSLMODE` | `disable` | Upstream TLS for the HTTP pgx connection: `disable` or `require` |

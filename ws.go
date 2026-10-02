@@ -59,13 +59,26 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid websocket key", http.StatusBadRequest)
 		return
 	}
+	addresses := r.URL.Query()["address"]
+	if len(c.pgAllowedAddrs) > 0 && len(addresses) > 1 {
+		http.Error(w, "one PostgreSQL address expected", http.StatusBadRequest)
+		return
+	}
+	requested := ""
+	if len(addresses) == 1 {
+		requested = addresses[0]
+	}
+	upstream, err := c.upstreamAddr(requested)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if !c.acquireUpstream() {
 		http.Error(w, "postgres connection limit reached", http.StatusServiceUnavailable)
 		return
 	}
 	defer c.releaseUpstream()
-	// Deliberately ignore ?address=. Only the configured local PostgreSQL is reachable.
-	backend, err := net.DialTimeout("tcp", c.pgAddr, 5*time.Second)
+	backend, err := net.DialTimeout("tcp", upstream, 5*time.Second)
 	if err != nil {
 		http.Error(w, "postgres unavailable", http.StatusBadGateway)
 		return

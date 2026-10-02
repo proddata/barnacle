@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
 
-: "${HERMIT_PG_ADDR:?set HERMIT_PG_ADDR}"
+if [ -z "${HERMIT_PG_ADDR:-}" ] && [ -z "${HERMIT_PG_ALLOWED_ADDRS:-}" ]; then
+  echo 'set HERMIT_PG_ADDR or HERMIT_PG_ALLOWED_ADDRS' >&2
+  exit 1
+fi
 : "${TEST_DATABASE_URL:?set TEST_DATABASE_URL}"
 HERMIT_BASE_URL=${HERMIT_BASE_URL:-http://127.0.0.1:8080}
 HERMIT_LISTEN=${HERMIT_LISTEN:-127.0.0.1:8080}
@@ -25,4 +28,8 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   sleep 1
 done
 if [ "$ready" -ne 1 ]; then cat "$log"; exit 1; fi
-npm test --prefix integration
+if [ "${HERMIT_ROUTING_ONLY:-}" = 1 ]; then
+  node integration/routing.mjs
+else
+  npm test --prefix integration
+fi
