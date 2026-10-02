@@ -1,0 +1,26 @@
+[Unit]
+Description=Hermit PostgreSQL HTTP and WebSocket proxy
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/sysconfig/hermit
+ExecStart=/usr/bin/hermit
+DynamicUser=yes
+Restart=on-failure
+RestartSec=5s
+MemoryAccounting=yes
+MemoryHigh=192M
+MemoryMax=256M
+MemorySwapMax=0
+OOMScoreAdjust=500
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

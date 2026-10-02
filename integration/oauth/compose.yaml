@@ -1,0 +1,58 @@
+name: hermit-oauth-test
+
+services:
+  issuer:
+    image: node:24-alpine
+    environment:
+      OAUTH_ISSUER: https://issuer:8443
+    command: ["node", "/test/issuer.mjs"]
+    volumes:
+      - ${HERMIT_OAUTH_FIXTURE_DIR:?set by run.mjs}:/fixture:ro
+      - ./issuer.mjs:/test/issuer.mjs:ro
+
+  postgres:
+    image: ${HERMIT_OAUTH_VALIDATOR_IMAGE:?set by run.mjs}
+    environment:
+      POSTGRES_PASSWORD: oauth_bootstrap_only
+      POSTGRES_DB: hermit
+    command:
+      - postgres
+      - -c
+      - listen_addresses=*
+      - -c
+      - hba_file=/fixture/pg_hba.conf
+      - -c
+      - oauth_validator_libraries=pg_oauth_validator
+      - -c
+      - pg_oauth_validator.audiences=https://postgres.example.internal/
+      - -c
+      - pg_oauth_validator.ca_file=/fixture/ca.crt
+    volumes:
+      - ${HERMIT_OAUTH_FIXTURE_DIR:?set by run.mjs}:/fixture:ro
+      - ${HERMIT_OAUTH_FIXTURE_DIR:?set by run.mjs}/init.sql:/docker-entrypoint-initdb.d/10-oauth.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -U postgres -d hermit"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    depends_on:
+      - issuer
+
+  hermit:
+    build:
+      context: ../..
+    environment:
+      HERMIT_LISTEN: :8080
+      HERMIT_PG_ADDR: postgres:5432
+      HERMIT_PG_USER: appuser
+      HERMIT_PG_DATABASE: hermit
+      HERMIT_OIDC_ISSUER: https://issuer:8443
+      HERMIT_OIDC_AUDIENCE: https://postgres.example.internal/
+      SSL_CERT_FILE: /fixture/ca.crt
+    volumes:
+      - ${HERMIT_OAUTH_FIXTURE_DIR:?set by run.mjs}/ca.crt:/fixture/ca.crt:ro
+    ports:
+      - 127.0.0.1:${HERMIT_OAUTH_PORT:?set by run.mjs}:8080
+    depends_on:
+      postgres:
+        condition: service_healthy

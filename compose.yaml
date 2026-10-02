@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: hermit
+      POSTGRES_PASSWORD: hermit_dev_password
+      POSTGRES_DB: hermit
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hermit -d hermit"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  hermit:
+    build: .
+    environment:
+      HERMIT_LISTEN: ':8080'
+      HERMIT_PG_ADDR: postgres:5432
+      HERMIT_PG_USER: hermit
+      HERMIT_PG_DATABASE: hermit
+      HERMIT_MAX_CONNECTIONS: '32'
+      HERMIT_MAX_HTTP_QUERIES: '${HERMIT_MAX_HTTP_QUERIES:-8}'
+      HERMIT_HTTP_MAX_ROW_MIB: '${HERMIT_HTTP_MAX_ROW_MIB:-8}'
+      HERMIT_HTTP_MAX_BUFFERED_MIB: '${HERMIT_HTTP_MAX_BUFFERED_MIB:-4}'
+      HERMIT_HTTP_MAX_RESPONSE_MIB: '${HERMIT_HTTP_MAX_RESPONSE_MIB:-128}'
+      HERMIT_OIDC_ISSUER: '${HERMIT_OIDC_ISSUER:-}'
+      HERMIT_OIDC_AUDIENCE: '${HERMIT_OIDC_AUDIENCE:-}'
+      GOMEMLIMIT: 160MiB
+      HERMIT_CONSOLE: 'true'
+    mem_limit: 256m
+    memswap_limit: 256m
+    ports:
+      - '127.0.0.1:8080:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  pgdata:

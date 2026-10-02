@@ -1,0 +1,16 @@
+# Local build output
+/hermit
+.DS_Store
+
+# Node integration tests: keep package.json, package-lock.json, and test source
+/integration/node_modules/
+/integration/coverage/
+/integration/.nyc_output/
+/integration/test-results/
+/integration/*.log
+/integration/.env
+/integration/.env.*
+!/integration/.env.example
+
+# RPM build artifacts
+/dist/
