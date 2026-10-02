@@ -40,6 +40,7 @@ jobs:
       - name: Neon driver integration tests
         env:
           HERMIT_PG_ADDR: 127.0.0.1:5432
+          HERMIT_PG_SSLMODE: disable
           HERMIT_PG_USER: hermit
           HERMIT_PG_DATABASE: hermit
           TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@localhost:5432/hermit
@@ -48,11 +49,17 @@ jobs:
         env:
           HERMIT_PG_ADDR: ''
           HERMIT_PG_ALLOWED_ADDRS: 127.0.0.1:5432
+          HERMIT_PG_SSLMODE: disable
           TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@127.0.0.1:5432/hermit
           HERMIT_ROUTING_ONLY: '1'
         run: ./integration/run.sh
       - run: docker compose config --quiet
       - run: docker build -t hermit:ci .
+      - name: PostgreSQL TLS in Compose
+        run: |
+          trap 'docker compose down' EXIT
+          docker compose up --build -d
+          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit node integration/pg-tls.mjs
       - name: HTTPS and WSS through HAProxy
         run: ./integration/tls/run.sh
 
@@ -80,6 +87,7 @@ jobs:
       - name: Neon driver integration tests on Fedora
         env:
           HERMIT_PG_ADDR: postgres:5432
+          HERMIT_PG_SSLMODE: disable
           HERMIT_PG_USER: hermit
           HERMIT_PG_DATABASE: hermit
           TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@postgres:5432/hermit

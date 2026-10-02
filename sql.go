@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,7 +116,7 @@ func (c config) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	if c.pgSSLMode == "disable" {
 		pgcfg.TLSConfig = nil
 	} else if c.pgSSLMode == "require" {
-		pgcfg.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}
+		pgcfg.TLSConfig = c.pgTLSConfig(host)
 	} else {
 		return nil, errors.New("HERMIT_PG_SSLMODE must be disable or require")
 	}

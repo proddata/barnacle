@@ -1,6 +1,8 @@
 # Hermit listens locally so HAProxy can terminate public TLS.
 HERMIT_LISTEN=127.0.0.1:8080
 HERMIT_PG_ADDR=127.0.0.1:5432
+HERMIT_PG_SSLMODE=require
+# HERMIT_PG_CA_FILE=/etc/hermit/postgres-ca.crt
 HERMIT_PG_USER=postgres
 HERMIT_PG_DATABASE=postgres
 HERMIT_MAX_CONNECTIONS=32

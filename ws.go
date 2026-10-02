@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -78,7 +77,7 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.releaseUpstream()
-	backend, err := net.DialTimeout("tcp", upstream, 5*time.Second)
+	backend, err := c.dialPostgres(upstream)
 	if err != nil {
 		http.Error(w, "postgres unavailable", http.StatusBadGateway)
 		return

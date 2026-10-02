@@ -13,6 +13,7 @@ This is a gap check for Hermit as a PostgreSQL proxy with fixed routing by defau
 | `OPTIONS /sql` | Browser preflight for configured origin | `sql.go` |
 | `GET /healthz` | Process liveness | `main.go` |
 | Optional upstream routing | HTTP connection-string host and WebSocket `?address=` select an exact allowed address | `routing_test.go`, `integration/routing.mjs` |
+| Upstream PostgreSQL TLS | Required by default for HTTP and WebSocket, with certificate and hostname verification; Compose generates a test CA | `pgtls_test.go`, `integration/pg-tls.mjs` |
 
 ## P0 — close gaps in the advertised API
 
@@ -31,7 +32,7 @@ This is a gap check for Hermit as a PostgreSQL proxy with fixed routing by defau
 - [ ] **Exercise `Pool.query()` over HTTP.** Add an integration case with `neonConfig.poolQueryViaFetch = true`, as well as `arrayMode` and `fullResults` options. Keep the existing `Client`/WebSocket test.
 - [ ] **Verify cancellation.** Abort a slow HTTP fetch and check that the PostgreSQL query stops promptly. Check WebSocket CancelRequest forwarding and cleanup after abrupt client disconnects. Add a database `statement_timeout` policy if request cancellation alone is insufficient.
 - [ ] **Harden WebSocket shutdown and limits.** Test close handshake, ping/pong, fragmented and large frames, half-open connections, idle sessions, connection count, and backpressure under slow clients. The current relay uses two copy goroutines per session and closes both sockets when either side ends.
-- [ ] **Test PostgreSQL native TLS through the WebSocket tunnel.** The relay forwards bytes, so the client/server TLS negotiation may work, but it is not in the integration suite. `HERMIT_PG_SSLMODE` currently configures only HTTP pgx connections.
+- [ ] **Decide whether to support client-initiated PostgreSQL TLS inside WebSocket.** Hermit now establishes and verifies its own PostgreSQL TLS connection for WebSocket sessions. The Neon driver's default sends plain wire messages inside WSS, and Compose confirms that PostgreSQL reports TLS. A client that sends an SSLRequest inside the WebSocket would need explicit handling; the current mode does not provide end-to-end PostgreSQL TLS from the client.
 - [ ] **Add readiness and basic metrics.** `/healthz` is process liveness only. Add an optional database readiness check, active WebSocket count, HTTP latency/error counts, and bounded log fields without credentials.
 - [ ] **Run end-to-end deployment checks.** HAProxy `https`/`wss`, Compose, and a Fedora RPM build have run locally. Browser CORS, graceful restart, and the actual GitHub Fedora CI job still need observation.
 - [ ] **Decide whether HTTP connection reuse is needed.** Each HTTP request opens a PostgreSQL connection today. Measure the latency and connection cost next to Postgres before adding pooling. If added, isolate connections by effective credentials and ensure no token/session state crosses requests.

@@ -1,10 +1,15 @@
 services:
+  pgcertgen:
+    build: ./integration/pgcertgen
+    volumes:
+      - pgcerts:/certs
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: hermit
       POSTGRES_PASSWORD: hermit_dev_password
       POSTGRES_DB: hermit
+    command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/pgcerts/server.crt", "-c", "ssl_key_file=/pgcerts/server.key"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hermit -d hermit"]
       interval: 2s
@@ -12,12 +17,18 @@ services:
       retries: 15
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - pgcerts:/pgcerts:ro
+    depends_on:
+      pgcertgen:
+        condition: service_completed_successfully
   hermit:
     build: .
     environment:
       HERMIT_LISTEN: ':8080'
       HERMIT_PG_ADDR: '${HERMIT_PG_ADDR-postgres:5432}'
       HERMIT_PG_ALLOWED_ADDRS: '${HERMIT_PG_ALLOWED_ADDRS:-}'
+      HERMIT_PG_SSLMODE: require
+      HERMIT_PG_CA_FILE: /pgcerts/ca.crt
       HERMIT_PG_USER: hermit
       HERMIT_PG_DATABASE: hermit
       HERMIT_MAX_CONNECTIONS: '32'
@@ -33,8 +44,11 @@ services:
     memswap_limit: 256m
     ports:
       - '127.0.0.1:8080:8080'
+    volumes:
+      - pgcerts:/pgcerts:ro
     depends_on:
       postgres:
         condition: service_healthy
 volumes:
   pgdata:
+  pgcerts:

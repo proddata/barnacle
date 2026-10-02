@@ -44,6 +44,7 @@ services:
     environment:
       HERMIT_LISTEN: :8080
       HERMIT_PG_ADDR: postgres:5432
+      HERMIT_PG_SSLMODE: disable
       HERMIT_PG_USER: appuser
       HERMIT_PG_DATABASE: hermit
       HERMIT_OIDC_ISSUER: https://issuer:8443

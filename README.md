@@ -29,7 +29,7 @@ Open **[localhost:8080](http://localhost:8080)**. The development console has **
 postgres://hermit:hermit_dev_password@localhost:5432/hermit
 ```
 
-Leave the bearer token field blank for this password-based demo. The WebSocket button speaks PostgreSQL wire protocol and authenticates with SCRAM. The HTTP button calls `POST /sql`. Compose keeps PostgreSQL off the host network and binds Hermit to `127.0.0.1:8080`; the example password is for local development only.
+Leave the bearer token field blank for this password-based demo. The WebSocket button speaks PostgreSQL wire protocol and authenticates with SCRAM. The HTTP button calls `POST /sql`. Compose creates a disposable CA and PostgreSQL certificate in its `pgcerts` volume; Hermit verifies that certificate on both upstream paths. Compose keeps PostgreSQL off the host network and binds Hermit to `127.0.0.1:8080`; the example password is for local development only.
 
 ### Try the HTTP API without the console
 
@@ -137,7 +137,7 @@ neonConfig.fetchEndpoint = 'https://hermit.example.com/sql';
 neonConfig.wsProxy = 'hermit.example.com/v2'; // string form sends ?address=host:port
 ```
 
-Allow only database addresses you control. Hermit resolves the listed hostnames when connecting, so keep their DNS under your control too. HTTP upstream TLS uses `HERMIT_PG_SSLMODE=require`; WebSocket clients must request PostgreSQL-native TLS themselves when the upstream network requires encryption.
+Allow only database addresses you control. Hermit resolves the listed hostnames when connecting, so keep their DNS under your control too. `HERMIT_PG_SSLMODE=require` makes Hermit establish and verify TLS to PostgreSQL for both HTTP and WebSocket sessions. The WebSocket client sends ordinary PostgreSQL wire messages inside WSS; Hermit secures the separate upstream leg. Client-initiated PostgreSQL TLS inside that WebSocket tunnel is not supported in this mode; keep the Neon driver's `forceDisablePgSSL=true` default.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -146,7 +146,8 @@ Allow only database addresses you control. Hermit resolves the listed hostnames 
 | `HERMIT_PG_ALLOWED_ADDRS` | empty | Enable request-based routing to these exact `host:port` destinations |
 | `HERMIT_PG_USER` | `postgres` | Default user for bearer HTTP requests |
 | `HERMIT_PG_DATABASE` | `postgres` | Default database for bearer HTTP requests |
-| `HERMIT_PG_SSLMODE` | `disable` | Upstream TLS for the HTTP pgx connection: `disable` or `require` |
+| `HERMIT_PG_SSLMODE` | `require` | Upstream TLS for HTTP and WebSocket: `require` verifies the server certificate and hostname; `disable` permits plaintext on a trusted local network |
+| `HERMIT_PG_CA_FILE` | empty | Optional PEM CA bundle for the upstream PostgreSQL certificate; empty uses the system trust store |
 | `HERMIT_QUERY_TIMEOUT` | `30s` | HTTP connection and query deadline |
 | `HERMIT_MAX_CONNECTIONS` | `32` | Maximum simultaneous HTTP and WebSocket PostgreSQL connections; excess requests receive 503 |
 | `HERMIT_MAX_HTTP_QUERIES` | `8` | Maximum simultaneous HTTP queries; excess requests receive 503 |
@@ -158,7 +159,7 @@ Allow only database addresses you control. Hermit resolves the listed hostnames 
 | `HERMIT_ALLOWED_ORIGIN` | empty | One additional allowed browser origin, e.g. `https://app.example.com` |
 | `HERMIT_CONSOLE` | `false` | Expose the manual console at `/` |
 
-Same-origin browser requests work without extra configuration. Set `HERMIT_ALLOWED_ORIGIN` to the exact origin of a separate frontend. Do not expose the development console publicly. HTTP upstream TLS is controlled by `HERMIT_PG_SSLMODE`; WebSocket traffic is a byte tunnel, so any PostgreSQL-native TLS negotiation comes from the client and has not yet been integration tested.
+Same-origin browser requests work without extra configuration. Set `HERMIT_ALLOWED_ORIGIN` to the exact origin of a separate frontend. Do not expose the development console publicly. Compose's generated CA is only for local testing; deploy with a CA you trust for your PostgreSQL server. For both transports, a failed TLS handshake or certificate check prevents the database session.
 
 ### Fedora
 
@@ -216,6 +217,7 @@ For a native development setup with PostgreSQL listening on the host, run `go te
 ```sh
 npm ci --prefix integration
 HERMIT_PG_ADDR=127.0.0.1:5432 \
+HERMIT_PG_SSLMODE=disable \
 HERMIT_PG_USER=hermit \
 HERMIT_PG_DATABASE=hermit \
 TEST_DATABASE_URL='postgres://hermit:hermit_dev_password@localhost:5432/hermit' \
@@ -223,6 +225,8 @@ TEST_DATABASE_URL='postgres://hermit:hermit_dev_password@localhost:5432/hermit' 
 ```
 
 The integration suite installs `@neondatabase/serverless` and `ws` from npm using the committed lockfile. [CI](.github/workflows/ci.yml) defines Ubuntu and Fedora jobs; the Ubuntu job also builds the Docker image.
+
+To verify Compose's upstream TLS directly, run `node integration/pg-tls.mjs` while the stack is up. It asks PostgreSQL's `pg_stat_ssl` view whether the current HTTP and WebSocket sessions use TLS. The Go suite also checks that WebSocket connections reject plaintext servers and certificates with the wrong hostname.
 
 The suite includes 55 built-in PostgreSQL type and parameter cases in both raw-text and plain-JSON modes. To compare the same cases with a deployed Neon proxy, put a **disposable** connection URL in the gitignored `integration/.env` as `NEON_COMPARE_DATABASE_URL=...`, then run `node integration/type-compare.mjs` while the Compose stack is up. Set `NEON_COMPARE_ENDPOINT=...` there only for a custom SQL endpoint. The comparator checks rows and result metadata and never prints the connection URL. In the 2026-10-02 run, 107 of 110 raw/plain variants matched. Neon's plain-JSON path returned HTTP 500 for empty integer arrays and split `box[]` elements at commas; Hermit preserves those PostgreSQL values. The comparison reports these three observed differences separately and fails on any other difference.
 

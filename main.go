@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 type config struct {
 	listen, pgAddr, pgDatabase, pgUser, pgPassword, pgSSLMode, allowedOrigin string
 	pgAllowedAddrs                                                           map[string]struct{}
+	pgRootCAs                                                                *x509.CertPool
 	consoleEnabled                                                           bool
 	queryTimeout                                                             time.Duration
 	upstreamSlots                                                            chan struct{}
@@ -78,6 +80,16 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	pgSSLMode := env("HERMIT_PG_SSLMODE", "require")
+	if pgSSLMode != "require" && pgSSLMode != "disable" {
+		slog.Error("HERMIT_PG_SSLMODE must be require or disable")
+		os.Exit(1)
+	}
+	pgRootCAs, err := loadPGRootCAs(os.Getenv("HERMIT_PG_CA_FILE"))
+	if err != nil {
+		slog.Error("invalid HERMIT_PG_CA_FILE", "error", err)
+		os.Exit(1)
+	}
 	cfg := config{
 		listen:               env("HERMIT_LISTEN", ":8080"),
 		pgAddr:               defaultPGAddr,
@@ -85,7 +97,8 @@ func main() {
 		pgDatabase:           env("HERMIT_PG_DATABASE", "postgres"),
 		pgUser:               env("HERMIT_PG_USER", "postgres"),
 		pgPassword:           os.Getenv("HERMIT_PG_PASSWORD"),
-		pgSSLMode:            env("HERMIT_PG_SSLMODE", "disable"),
+		pgSSLMode:            pgSSLMode,
+		pgRootCAs:            pgRootCAs,
 		allowedOrigin:        os.Getenv("HERMIT_ALLOWED_ORIGIN"),
 		consoleEnabled:       strings.EqualFold(os.Getenv("HERMIT_CONSOLE"), "true"),
 		queryTimeout:         timeout,

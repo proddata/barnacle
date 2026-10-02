@@ -57,4 +57,10 @@ fi
 HERMIT_BASE_URL=https://127.0.0.1:8443 \
 NODE_EXTRA_CA_CERTS="$tls_dir/ca.crt" \
 TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit \
-npm test --prefix integration
+node integration/pg-tls.mjs
+if [ "${HERMIT_TLS_SMOKE_ONLY:-}" != 1 ]; then
+    HERMIT_BASE_URL=https://127.0.0.1:8443 \
+    NODE_EXTRA_CA_CERTS="$tls_dir/ca.crt" \
+    TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit \
+    npm test --prefix integration
+fi
