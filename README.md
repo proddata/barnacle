@@ -1,6 +1,8 @@
 # Hermit 🦀
 
-**PostgreSQL has a portable home on the web.** Hermit wraps PostgreSQL wire traffic in a WebSocket connection and gives short queries a separate HTTP entrance. It is a small Go process meant to sit next to one PostgreSQL instance, with HAProxy handling public TLS.
+**A web gateway for PostgreSQL, wherever it runs.** Hermit exposes short SQL queries over HTTP and PostgreSQL sessions over WebSocket. It can sit in front of a self-hosted database or a managed PostgreSQL service, as long as the database is reachable from Hermit and supports the configured authentication method. This makes PostgreSQL accessible to serverless applications and agent-driven workflows through HTTPS and WSS, while keeping the database address fixed on the server.
+
+Hermit implements a subset of the interface used by the Neon serverless driver, so applications can use that driver with a PostgreSQL deployment outside Neon. Hermit itself is a small Go process that connects to one configured PostgreSQL endpoint; HAProxy terminates public TLS in the supplied deployment example. An optional OIDC access-token gate can protect both entrances. For end-to-end OAuth on HTTP, PostgreSQL must also support OAuth authentication and have a validator and role mapping configured; the gate alone does not grant database access. See [Authentication](#authentication-who-checks-what) for the transport-specific details.
 
 Hermit is licensed under [Apache-2.0](LICENSE). See the
 [third-party license inventory](THIRD-PARTY-NOTICES.md) for bundled Go code,
@@ -13,7 +15,7 @@ neon() / sql.query()   ─── POST /sql ───►  HTTP query handler ─�
 Client / Pool          ─── WS /v2 ─────►  binary wire tunnel ─── TCP ───►  :5432
 ```
 
-Hermit is inspired by [Neon's wsproxy](https://github.com/neondatabase/wsproxy). It is a **compatible subset**, not a drop-in replacement for Neon's full proxy. [todo.md](todo.md) lists the precise gaps found against the published serverless driver and Neon proxy source.
+Hermit is inspired by [Neon's wsproxy](https://github.com/neondatabase/wsproxy). It is a **compatible subset**, not a drop-in replacement for Neon's full proxy or its platform routing. [todo.md](todo.md) lists the precise gaps found against the published serverless driver and Neon proxy source.
 
 ## Start here
 
