@@ -120,9 +120,17 @@ func (c config) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 			return nil, errors.New("expected Authorization: Bearer <token>")
 		}
 		bearer := strings.TrimSpace(token)
-		pgcfg.Password = bearer
 		pgcfg.OAuthTokenProvider = func(context.Context) (string, error) {
 			return bearer, nil
+		}
+		if c.oidc != nil {
+			// A verified access token must only be sent with PostgreSQL OAuth.
+			// Reject SCRAM/password/unauthenticated server configurations.
+			pgcfg.Password = ""
+			pgcfg.RequireAuth = "oauth"
+		} else {
+			// Preserve password-shaped bearer tokens for legacy setups.
+			pgcfg.Password = bearer
 		}
 	}
 	if pgcfg.User == "" || pgcfg.Database == "" {

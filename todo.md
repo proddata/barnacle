@@ -8,7 +8,7 @@ This is a gap check for Hermit as a **single PostgreSQL instance** proxy, compar
 | --- | --- | --- |
 | `POST /sql` single query | Parameterized query and Neon-shaped result | `integration/neon.test.mjs` |
 | `POST /sql` batch | One transaction with an array of results | `integration/neon.test.mjs` |
-| HTTP bearer header | Value passed to PostgreSQL as password or SASL OAUTHBEARER token | `integration/neon.test.mjs`, `integration/oauth/run.mjs` |
+| HTTP bearer header | OAUTHBEARER is required with Hermit's OIDC gate; without it, pgx can use OAUTHBEARER or legacy password authentication | `integration/neon.test.mjs`, `integration/oauth/run.mjs` |
 | `GET /v2` and `/v1` WebSocket | Binary PostgreSQL wire tunnel; SCRAM login tested | `integration/neon.test.mjs`, `ws_test.go` |
 | `OPTIONS /sql` | Browser preflight for configured origin | `sql.go` |
 | `GET /healthz` | Process liveness | `main.go` |

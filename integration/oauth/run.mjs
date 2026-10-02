@@ -80,14 +80,17 @@ try {
     '-out', join(fixture, 'issuer.crt'), '-extfile', join(fixture, 'issuer.ext')], { stdio: 'ignore' });
 
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const valid = jwt(privateKey);
   const jwk = publicKey.export({ format: 'jwk' });
   await writeFile(join(fixture, 'jwks.json'), JSON.stringify({ keys: [{
     ...jwk, kid: 'hermit-test-key', use: 'sig', alg: 'RS256',
   }] }));
-  await writeFile(join(fixture, 'init.sql'), 'CREATE ROLE appuser LOGIN;\nCREATE ROLE otheruser LOGIN;\n');
+  await writeFile(join(fixture, 'init.sql'),
+    `CREATE ROLE appuser LOGIN;\nCREATE ROLE otheruser LOGIN;\nCREATE ROLE fallbackuser LOGIN PASSWORD '${valid}';\n`);
   await writeFile(join(fixture, 'pg_hba.conf'), [
     'local all all trust',
     `host all appuser,otheruser 0.0.0.0/0 oauth issuer=${issuer} scope="connect:postgres" validator=pg_oauth_validator`,
+    'host all fallbackuser 0.0.0.0/0 scram-sha-256',
     '',
   ].join('\n'));
 
@@ -105,7 +108,6 @@ try {
 
   neonConfig.fetchEndpoint = `${base}/sql`;
   const databaseUrl = 'postgres://appuser@localhost/hermit';
-  const valid = jwt(privateKey);
   const rows = await neon(databaseUrl, { authToken: valid })`select current_user as username, current_database() as database`;
   assert.deepEqual(rows[0], { username: 'appuser', database: 'hermit' });
 
@@ -130,8 +132,11 @@ try {
   assert.equal(badScope.body.code, 'HERMIT_ERROR');
   const wrongRole = await post(valid, 'postgres://otheruser@localhost/hermit');
   assert.equal(wrongRole.status, 401, `PostgreSQL validator did not reject the wrong role: ${JSON.stringify(wrongRole)}`);
+  const passwordFallback = await post(valid, 'postgres://fallbackuser@localhost/hermit');
+  assert.equal(passwordFallback.status, 502,
+    `OIDC request fell back to PostgreSQL password authentication: ${JSON.stringify(passwordFallback)}`);
   assert.equal((await post(valid)).status, 200, 'valid token failed after rejection cases');
-  process.stdout.write('OAuth end-to-end: valid access token accepted; bad signature, audience, scope, and role rejected.\n');
+  process.stdout.write('OAuth end-to-end: valid access token accepted; bad signature, audience, scope, role, and password fallback rejected.\n');
 } catch (error) {
   try { await run('docker', [...composeArgs, 'logs', '--no-color'], { env }); } catch { /* Preserve the test failure. */ }
   throw error;

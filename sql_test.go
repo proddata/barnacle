@@ -39,6 +39,24 @@ func TestConnectionConfigRequiresCredential(t *testing.T) {
 		t.Fatal("accepted passwordless connection string")
 	}
 }
+func TestOIDCConnectionRequiresOAuth(t *testing.T) {
+	cfg := config{pgAddr: "127.0.0.1:5432", pgSSLMode: "disable", oidc: &oidcGate{}}
+	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
+	req.Header.Set("Neon-Connection-String", "postgres://app:legacy-password@remote.example/appdb?require_auth=scram-sha-256")
+	req.Header.Set("Authorization", "Bearer signed-access-token")
+	pgcfg, err := cfg.connectionConfig(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pgcfg.Password != "" || pgcfg.RequireAuth != "oauth" || pgcfg.OAuthTokenProvider == nil {
+		t.Fatalf("OIDC connection permits non-OAuth authentication: password set=%t require_auth=%q provider set=%t",
+			pgcfg.Password != "", pgcfg.RequireAuth, pgcfg.OAuthTokenProvider != nil)
+	}
+	token, err := pgcfg.OAuthTokenProvider(context.Background())
+	if err != nil || token != "signed-access-token" {
+		t.Fatalf("OAuth token = %q, %v", token, err)
+	}
+}
 func TestOriginPolicy(t *testing.T) {
 	cfg := config{allowedOrigin: "https://app.example.com"}
 	req := httptest.NewRequest("POST", "http://localhost:8080/sql", nil)
