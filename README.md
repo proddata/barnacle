@@ -106,7 +106,7 @@ With the driver, use `neon(databaseUrlWithoutPassword, { authToken: getToken })`
 | `GET /healthz` | Process liveness | Working |
 | `GET /` | Manual console when `HERMIT_CONSOLE=true` | Development only |
 
-The HTTP response has `rows`, `fields`, `command`, `rowCount`, and `rowAsArray`; batch responses wrap these in `results`. DDL returns `rowCount: null` when PostgreSQL's command tag has no count. The driver requests `Neon-Raw-Text-Output: true` and `Neon-Array-Mode: true`, so it can apply its own PostgreSQL type parsers. Hermit accepts the corresponding headers, plus `Neon-Batch-Read-Only`, `Neon-Batch-Deferrable`, and all four driver `Neon-Batch-Isolation-Level` values. A query object's `arrayMode` can override the header for that query, including inside a batch.
+The HTTP response has `rows`, `fields`, `command`, `rowCount`, and `rowAsArray`; batch responses wrap these in `results`. DDL returns `rowCount: null` when PostgreSQL's command tag has no count. The driver requests `Neon-Raw-Text-Output: true` and `Neon-Array-Mode: true`, so it can apply its own PostgreSQL type parsers. Hermit accepts the corresponding headers, plus `Neon-Batch-Read-Only`, `Neon-Batch-Deferrable`, and all four driver `Neon-Batch-Isolation-Level` values. A query object's `arrayMode` can override the header for that query, including inside a batch. Aborting an HTTP request cancels its PostgreSQL query. WebSocket sessions relay PostgreSQL CancelRequest packets; when a client connection drops unexpectedly, Hermit also sends a bounded cancellation request to stop work left running on that backend.
 
 `POST /sql` compresses JSON responses of 1 KiB or more when the client sends `Accept-Encoding: gzip`. Small responses stay plain. The Neon driver uses `fetch()`, so browser and Node HTTP stacks handle response decompression; the driver itself does not set a gzip option. Request bodies remain plain JSON.
 
@@ -116,7 +116,7 @@ Streaming lets Hermit avoid holding a whole result, while the Neon driver's `neo
 
 ## Deploy near PostgreSQL
 
-Set `HERMIT_PG_ADDR` to the nearby server, keep the Hermit listener private, and let HAProxy terminate public TLS. The repository includes a starting [HAProxy configuration](haproxy.cfg) with WebSocket-friendly timeouts and a health check. HAProxy should set `X-Forwarded-Proto: https` when serving the console through TLS.
+Set `HERMIT_PG_ADDR` to the nearby server and keep the Hermit listener private. The repository includes an optional [HAProxy deployment example](haproxy.cfg) for public TLS, with WebSocket-friendly timeouts and a health check. Its `option abortonclose` forwards client aborts promptly so Hermit can cancel HTTP queries. HAProxy should set `X-Forwarded-Proto: https` when serving the console through TLS.
 
 ### Route to more than one PostgreSQL address
 

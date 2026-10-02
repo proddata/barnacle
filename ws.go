@@ -102,13 +102,19 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writer := &wsWriter{conn: client}
-	done := make(chan struct{}, 2)
+	keyData := &backendKeyCapture{}
+	type relayEnd struct {
+		fromClient bool
+		err        error
+	}
+	done := make(chan relayEnd, 2)
 	go func() {
-		defer func() { done <- struct{}{} }()
+		defer func() { done <- relayEnd{} }()
 		buf := make([]byte, 32<<10)
 		for {
 			n, e := backend.Read(buf)
 			if n > 0 {
+				keyData.feed(buf[:n])
 				if writer.frame(2, buf[:n]) != nil {
 					return
 				}
@@ -118,8 +124,11 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
-	go func() { defer func() { done <- struct{}{} }(); _ = readWS(rw.Reader, backend, writer) }()
-	<-done
+	go func() { done <- relayEnd{fromClient: true, err: readWS(rw.Reader, backend, writer)} }()
+	ended := <-done
+	if ended.fromClient && ended.err != nil {
+		c.cancelDisconnectedSession(upstream, keyData)
+	}
 	_ = client.Close()
 	_ = backend.Close()
 	<-done

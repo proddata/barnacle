@@ -21,6 +21,7 @@ type config struct {
 	consoleEnabled                                                           bool
 	queryTimeout                                                             time.Duration
 	upstreamSlots                                                            chan struct{}
+	cancelSlots                                                              chan struct{}
 	httpSlots                                                                chan struct{}
 	maxHTTPRowBytes, maxHTTPBufferedBytes, maxHTTPResponseBytes              int64
 	oidc                                                                     *oidcGate
@@ -103,6 +104,7 @@ func main() {
 		consoleEnabled:       strings.EqualFold(os.Getenv("HERMIT_CONSOLE"), "true"),
 		queryTimeout:         timeout,
 		upstreamSlots:        make(chan struct{}, maxConnections),
+		cancelSlots:          make(chan struct{}, min(8, maxConnections)),
 		httpSlots:            make(chan struct{}, maxHTTPQueries),
 		maxHTTPRowBytes:      int64(maxHTTPRowMiB) << 20,
 		maxHTTPBufferedBytes: int64(maxHTTPBufferedMiB) << 20,
