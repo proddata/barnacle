@@ -44,6 +44,56 @@ test('Neon HTTP transaction returns both results', async () => {
   assert.equal(second[0].value, 2);
 });
 
+test('Neon transaction applies mixed per-query arrayMode and fullResults options', async () => {
+  const sql = neon(databaseUrl);
+  const [object, array] = await sql.transaction([
+    sql.query('select 41::int as value', [], { arrayMode: false, fullResults: true }),
+    sql.query('select 42::int as value', [], { arrayMode: true, fullResults: true }),
+  ]);
+  assert.deepEqual(object.rows, [{ value: 41 }]);
+  assert.equal(object.rowAsArray, false);
+  assert.deepEqual(array.rows, [[42]]);
+  assert.equal(array.rowAsArray, true);
+});
+
+test('HTTP request body arrayMode overrides the request header per query', async () => {
+  const response = await fetch(`${base}/sql`, {
+    method: 'POST',
+    headers: {
+      'Neon-Connection-String': databaseUrl,
+      'Neon-Array-Mode': 'true',
+      'Neon-Raw-Text-Output': 'true',
+    },
+    body: JSON.stringify({
+      queries: [
+        { query: 'select 41::int as value', params: [], arrayMode: false },
+        { query: 'select 42::int as value', params: [], arrayMode: true },
+        { query: 'select 43::int as value', params: [] },
+      ],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const { results } = await response.json();
+  assert.deepEqual(results.map((result) => result.rows), [
+    [{ value: '41' }], [['42']], [['43']],
+  ]);
+  assert.deepEqual(results.map((result) => result.rowAsArray), [false, true, true]);
+
+  const single = await fetch(`${base}/sql`, {
+    method: 'POST',
+    headers: {
+      'Neon-Connection-String': databaseUrl,
+      'Neon-Array-Mode': 'true',
+      'Neon-Raw-Text-Output': 'true',
+    },
+    body: JSON.stringify({ query: 'select 44::int as value', params: [], arrayMode: false }),
+  });
+  assert.equal(single.status, 200);
+  const result = await single.json();
+  assert.deepEqual(result.rows, [{ value: '44' }]);
+  assert.equal(result.rowAsArray, false);
+});
+
 test('Neon HTTP accepts all batch isolation values', async () => {
   const sql = neon(databaseUrl);
   for (const [isolationLevel, expected] of [

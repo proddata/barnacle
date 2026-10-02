@@ -22,13 +22,15 @@ import (
 const pgRowMessageOverhead = 16 << 10 // PostgreSQL allows at most 1,600 columns.
 
 type query struct {
-	Query  string `json:"query"`
-	Params []any  `json:"params"`
+	Query     string `json:"query"`
+	Params    []any  `json:"params"`
+	ArrayMode *bool  `json:"arrayMode"`
 }
 type queryRequest struct {
-	Query   string  `json:"query"`
-	Params  []any   `json:"params"`
-	Queries []query `json:"queries"`
+	Query     string  `json:"query"`
+	Params    []any   `json:"params"`
+	ArrayMode *bool   `json:"arrayMode"`
+	Queries   []query `json:"queries"`
 }
 type field struct {
 	Name             string `json:"name"`
@@ -170,7 +172,7 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 	}
 	queries := req.Queries
 	if !batch {
-		queries = []query{{Query: req.Query, Params: req.Params}}
+		queries = []query{{Query: req.Query, Params: req.Params, ArrayMode: req.ArrayMode}}
 	}
 	if len(queries) == 0 || len(queries) > 100 {
 		apiError(w, 400, errors.New("expected 1 to 100 queries"))
@@ -240,6 +242,10 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 		runner = tx
 	}
 	for _, q := range queries {
+		queryArrayMode := arrayMode
+		if q.ArrayMode != nil {
+			queryArrayMode = *q.ArrayMode
+		}
 		args := make([]any, len(q.Params))
 		for i, v := range q.Params {
 			args[i], err = pgParameter(v)
@@ -255,13 +261,13 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !batch && canStream(rows, conn.TypeMap(), rawText) {
-			if err := streamSingle(w, rows, conn.TypeMap(), arrayMode, rawText, c.maxHTTPRowBytes, c.maxHTTPResponseBytes); err != nil {
+			if err := streamSingle(w, rows, conn.TypeMap(), queryArrayMode, rawText, c.maxHTTPRowBytes, c.maxHTTPResponseBytes); err != nil {
 				slog.Warn("HTTP result stream interrupted", "error", err)
 			}
 			return
 		}
 		conn.PgConn().Frontend().SetMaxBodyLen(int(min(c.maxHTTPBufferedBytes, bufferedRemaining)) + pgRowMessageOverhead)
-		item, err := collect(ctx, rows, conn.TypeMap(), arrayMode, rawText, &bufferedRemaining)
+		item, err := collect(ctx, rows, conn.TypeMap(), queryArrayMode, rawText, &bufferedRemaining)
 		if err != nil {
 			if errors.Is(err, errHTTPResultTooLarge) {
 				apiError(w, http.StatusRequestEntityTooLarge, err)
