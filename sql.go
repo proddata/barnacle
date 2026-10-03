@@ -262,7 +262,7 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 		}
 		if !batch && canStream(rows, conn.TypeMap(), rawText) {
 			if err := streamSingle(w, rows, conn.TypeMap(), queryArrayMode, rawText, c.maxHTTPRowBytes, c.maxHTTPResponseBytes); err != nil {
-				slog.Warn("HTTP result stream interrupted", "error", err)
+				slog.Warn("HTTP result stream interrupted", "kind", interruptedResultKind(err))
 			}
 			return
 		}

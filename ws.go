@@ -114,6 +114,10 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 	if err = rw.Flush(); err != nil {
 		return
 	}
+	if c.metrics != nil {
+		c.metrics.websocketActive.Add(1)
+		defer c.metrics.websocketActive.Add(-1)
+	}
 	writer := &wsWriter{conn: client, writeTimeout: c.wsWriteTimeout}
 	keyData := &backendKeyCapture{}
 	type relayEnd struct {

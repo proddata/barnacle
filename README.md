@@ -104,6 +104,8 @@ With the driver, use `neon(databaseUrlWithoutPassword, { authToken: getToken })`
 | `OPTIONS /sql` | Browser CORS preflight | Working |
 | `GET /v2`, `GET /v1` | WebSocket upgrade; binary PostgreSQL wire bytes | Working |
 | `GET /healthz` | Process liveness | Working |
+| `GET /readyz` | Process readiness; optionally checks PostgreSQL network and TLS | Working |
+| `GET /metrics` | Basic Prometheus metrics when enabled | Optional |
 | `GET /` | Manual console when `HERMIT_CONSOLE=true` | Development only |
 
 The HTTP response has `rows`, `fields`, `command`, `rowCount`, and `rowAsArray`; batch responses wrap these in `results`. DDL returns `rowCount: null` when PostgreSQL's command tag has no count. The driver requests `Neon-Raw-Text-Output: true` and `Neon-Array-Mode: true`, so it can apply its own PostgreSQL type parsers. Hermit accepts the corresponding headers, plus `Neon-Batch-Read-Only`, `Neon-Batch-Deferrable`, and all four driver `Neon-Batch-Isolation-Level` values. A query object's `arrayMode` can override the header for that query, including inside a batch. Aborting an HTTP request cancels its PostgreSQL query. WebSocket sessions relay PostgreSQL CancelRequest packets; when a client connection drops unexpectedly, Hermit also sends a bounded cancellation request to stop work left running on that backend.
@@ -137,7 +139,7 @@ neonConfig.fetchEndpoint = 'https://hermit.example.com/sql';
 neonConfig.wsProxy = 'hermit.example.com/v2'; // string form sends ?address=host:port
 ```
 
-Allow only database addresses you control. Hermit resolves the listed hostnames when connecting, so keep their DNS under your control too. `HERMIT_PG_SSLMODE=require` makes Hermit establish and verify TLS to PostgreSQL for both HTTP and WebSocket sessions. The WebSocket client sends ordinary PostgreSQL wire messages inside WSS; Hermit secures the separate upstream leg. Client-initiated PostgreSQL TLS inside that WebSocket tunnel is not supported in this mode; keep the Neon driver's `forceDisablePgSSL=true` default.
+Allow only database addresses you control. Hermit resolves the listed hostnames when connecting, so keep their DNS under your control too. `HERMIT_PG_SSLMODE=require` makes Hermit establish and verify TLS to PostgreSQL for both HTTP and WebSocket sessions. The WebSocket client sends ordinary PostgreSQL wire messages inside WSS; Hermit secures the separate upstream leg. Keep the Neon driver's `forceDisablePgSSL=true` default. Hermit does not offer client-initiated PostgreSQL TLS inside WebSocket: that would need a separate pass-through path where Hermit could not perform its existing upstream certificate check. The [driver describes its client-side PostgreSQL TLS as experimental](https://github.com/neondatabase/serverless/blob/main/CONFIG.md#usesecurewebsocket-boolean).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -149,6 +151,8 @@ Allow only database addresses you control. Hermit resolves the listed hostnames 
 | `HERMIT_PG_SSLMODE` | `require` | Upstream TLS for HTTP and WebSocket: `require` verifies the server certificate and hostname; `disable` permits plaintext on a trusted local network |
 | `HERMIT_PG_CA_FILE` | empty | Optional PEM CA bundle for the upstream PostgreSQL certificate; empty uses the system trust store |
 | `HERMIT_QUERY_TIMEOUT` | `30s` | HTTP connection and query deadline |
+| `HERMIT_READY_PG_ADDR` | empty | Optional `host:port` probe for `/readyz`; checks TCP and configured PostgreSQL TLS, without authentication |
+| `HERMIT_METRICS` | `false` | Expose `GET /metrics` on the main listener; keep it private |
 | `HERMIT_WS_IDLE_TIMEOUT` | `30m` | Close a WebSocket session after this long without client frames or PostgreSQL output |
 | `HERMIT_WS_WRITE_TIMEOUT` | `30s` | Maximum time for each WebSocket or upstream PostgreSQL write |
 | `HERMIT_MAX_CONNECTIONS` | `32` | Maximum simultaneous HTTP and WebSocket PostgreSQL connections; excess requests receive 503 |
@@ -158,10 +162,12 @@ Allow only database addresses you control. Hermit resolves the listed hostnames 
 | `HERMIT_HTTP_MAX_RESPONSE_MIB` | `128` | Maximum uncompressed HTTP result JSON bytes |
 | `HERMIT_OIDC_ISSUER` | empty | Exact issuer URL; set with `HERMIT_OIDC_AUDIENCE` to enable the access-token gate |
 | `HERMIT_OIDC_AUDIENCE` | empty | Required resource audience when the OIDC gate is enabled |
-
-A WebSocket query that produces no output for longer than `HERMIT_WS_IDLE_TIMEOUT` will be disconnected. Raise that setting for longer quiet queries; PostgreSQL's own `statement_timeout` remains the query-duration limit.
 | `HERMIT_ALLOWED_ORIGIN` | empty | One additional allowed browser origin, e.g. `https://app.example.com` |
 | `HERMIT_CONSOLE` | `false` | Expose the manual console at `/` |
+
+A WebSocket query that produces no output for longer than `HERMIT_WS_IDLE_TIMEOUT` will be disconnected. Raise that setting for longer quiet queries; PostgreSQL's own `statement_timeout` remains the query-duration limit.
+
+`/healthz` checks that Hermit is running. `/readyz` returns 200 when ready; set `HERMIT_READY_PG_ADDR` to enable a PostgreSQL transport probe, which returns 503 if the address cannot be reached or its TLS certificate fails verification. The probe does not log in or run SQL. `/metrics` is disabled by default. When enabled, it reports active WebSockets, SQL request and HTTP error counts, and a SQL request duration histogram without query text or credentials. Restrict access to that path at your ingress if the main listener is exposed.
 
 Same-origin browser requests work without extra configuration. Set `HERMIT_ALLOWED_ORIGIN` to the exact origin of a separate frontend. Do not expose the development console publicly. Compose's generated CA is only for local testing; deploy with a CA you trust for your PostgreSQL server. For both transports, a failed TLS handshake or certificate check prevents the database session.
 

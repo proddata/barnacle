@@ -15,17 +15,16 @@ import (
 )
 
 type config struct {
-	listen, pgAddr, pgDatabase, pgUser, pgPassword, pgSSLMode, allowedOrigin string
-	pgAllowedAddrs                                                           map[string]struct{}
-	pgRootCAs                                                                *x509.CertPool
-	consoleEnabled                                                           bool
-	queryTimeout                                                             time.Duration
-	wsIdleTimeout, wsWriteTimeout                                            time.Duration
-	upstreamSlots                                                            chan struct{}
-	cancelSlots                                                              chan struct{}
-	httpSlots                                                                chan struct{}
-	maxHTTPRowBytes, maxHTTPBufferedBytes, maxHTTPResponseBytes              int64
-	oidc                                                                     *oidcGate
+	listen, pgAddr, readyPGAddr, allowedOrigin                  string
+	pgDatabase, pgUser, pgPassword, pgSSLMode                   string
+	pgAllowedAddrs                                              map[string]struct{}
+	pgRootCAs                                                   *x509.CertPool
+	consoleEnabled                                              bool
+	queryTimeout, wsIdleTimeout, wsWriteTimeout                 time.Duration
+	upstreamSlots, cancelSlots, httpSlots, readySlots           chan struct{}
+	maxHTTPRowBytes, maxHTTPBufferedBytes, maxHTTPResponseBytes int64
+	oidc                                                        *oidcGate
+	metrics                                                     *metrics
 }
 
 func env(key, fallback string) string {
@@ -92,6 +91,14 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	readyPGAddr := os.Getenv("HERMIT_READY_PG_ADDR")
+	if readyPGAddr != "" {
+		readyPGAddr, err = canonicalPGAddr(readyPGAddr)
+		if err != nil {
+			slog.Error("invalid HERMIT_READY_PG_ADDR", "error", err)
+			os.Exit(1)
+		}
+	}
 	pgSSLMode := env("HERMIT_PG_SSLMODE", "require")
 	if pgSSLMode != "require" && pgSSLMode != "disable" {
 		slog.Error("HERMIT_PG_SSLMODE must be require or disable")
@@ -105,6 +112,7 @@ func main() {
 	cfg := config{
 		listen:               env("HERMIT_LISTEN", ":8080"),
 		pgAddr:               defaultPGAddr,
+		readyPGAddr:          readyPGAddr,
 		pgAllowedAddrs:       allowedAddrs,
 		pgDatabase:           env("HERMIT_PG_DATABASE", "postgres"),
 		pgUser:               env("HERMIT_PG_USER", "postgres"),
@@ -119,9 +127,11 @@ func main() {
 		upstreamSlots:        make(chan struct{}, maxConnections),
 		cancelSlots:          make(chan struct{}, min(8, maxConnections)),
 		httpSlots:            make(chan struct{}, maxHTTPQueries),
+		readySlots:           make(chan struct{}, 1),
 		maxHTTPRowBytes:      int64(maxHTTPRowMiB) << 20,
 		maxHTTPBufferedBytes: int64(maxHTTPBufferedMiB) << 20,
 		maxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
+		metrics:              &metrics{},
 	}
 	issuer := os.Getenv("HERMIT_OIDC_ISSUER")
 	audience := os.Getenv("HERMIT_OIDC_AUDIENCE")
@@ -134,8 +144,14 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
-	mux.HandleFunc("POST /sql", gzipSQL(cfg.sql))
+	mux.HandleFunc("GET /readyz", cfg.ready)
+	mux.HandleFunc("POST /sql", cfg.metrics.measureSQL(gzipSQL(cfg.sql)))
 	mux.HandleFunc("OPTIONS /sql", cfg.preflight)
+	if strings.EqualFold(os.Getenv("HERMIT_METRICS"), "true") {
+		mux.HandleFunc("GET /metrics", cfg.metrics.serve)
+	} else {
+		mux.HandleFunc("GET /metrics", http.NotFound)
+	}
 	mux.HandleFunc("GET /v1", cfg.websocket)
 	mux.HandleFunc("GET /v2", cfg.websocket)
 	if cfg.consoleEnabled {
