@@ -2,8 +2,12 @@ package pgws
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"testing"
+	"time"
+
+	"github.com/proddata/hermit/internal/gateway"
 )
 
 func TestBackendKeyCaptureSkipsRowsAndHandlesSplitMessages(t *testing.T) {
@@ -25,5 +29,23 @@ func TestBackendKeyCaptureSkipsRowsAndHandlesSplitMessages(t *testing.T) {
 	pid, _ = parser.key()
 	if pid != 42 {
 		t.Fatal("backend key changed after capture")
+	}
+}
+
+func TestShutdownCancellationWaitsOnlyUntilDeadline(t *testing.T) {
+	key := &backendKeyCapture{}
+	key.feed([]byte{'K', 0, 0, 0, 12, 0, 0, 0, 42, 1, 2, 3, 4})
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	handler := New(&gateway.Config{CancelSlots: slots})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	handler.cancelForShutdown(ctx, "127.0.0.1:1", key)
+	if time.Since(started) > time.Second {
+		t.Fatal("shutdown cancellation exceeded its deadline")
+	}
+	if len(slots) != 1 {
+		t.Fatal("shutdown cancellation disturbed a busy slot")
 	}
 }

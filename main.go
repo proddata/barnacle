@@ -154,17 +154,30 @@ func main() {
 	server := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
+		stop() // A second signal uses the operating system's default handling.
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = server.Shutdown(shutdown)
+		results := make(chan error, 2)
+		go func() { results <- server.Shutdown(shutdown) }()
+		go func() { results <- wsHandler.Shutdown(shutdown) }()
+		for range 2 {
+			if err := <-results; err != nil {
+				slog.Warn("shutdown did not complete cleanly", "error", err)
+			}
+		}
+		close(shutdownDone)
 	}()
 	slog.Info("hermit listening", "address", cfg.Listen, "postgres", cfg.PGAddr)
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		stop()
+		<-shutdownDone
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
+	<-shutdownDone
 }
 
 func positiveIntEnv(key string, fallback int) (int, error) {

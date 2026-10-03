@@ -32,4 +32,5 @@ if [ "${HERMIT_ROUTING_ONLY:-}" = 1 ]; then
   node integration/routing.mjs
 else
   npm test --prefix integration
+  HERMIT_SHUTDOWN_BINARY="$binary" node integration/shutdown.mjs
 fi

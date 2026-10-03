@@ -1,6 +1,7 @@
 package pgws
 
 import (
+	"context"
 	"encoding/binary"
 	"sync"
 	"time"
@@ -101,4 +102,20 @@ func (c Handler) cancelDisconnectedSession(addr string, key *backendKeyCapture) 
 		}
 		c.cancelPostgres(addr, pid, secret)
 	}()
+}
+
+func (c Handler) cancelForShutdown(ctx context.Context, addr string, key *backendKeyCapture) {
+	pid, secret := key.key()
+	if len(secret) == 0 {
+		return
+	}
+	if c.CancelSlots != nil {
+		select {
+		case c.CancelSlots <- struct{}{}:
+			defer func() { <-c.CancelSlots }()
+		case <-ctx.Done():
+			return
+		}
+	}
+	c.cancelPostgres(addr, pid, secret)
 }

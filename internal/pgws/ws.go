@@ -2,6 +2,7 @@ package pgws
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -21,13 +23,24 @@ type wsWriter struct {
 	conn         net.Conn
 	mu           sync.Mutex
 	writeTimeout time.Duration
+	closing      atomic.Bool
+	closeSent    bool
 }
 
 func (w *wsWriter) frame(op byte, data []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.writeTimeout > 0 {
-		if err := w.conn.SetWriteDeadline(time.Now().Add(w.writeTimeout)); err != nil {
+	if w.closeSent {
+		if op == 8 {
+			return nil
+		}
+		return net.ErrClosed
+	}
+	if w.closing.Load() && op != 8 {
+		return net.ErrClosed
+	}
+	if timeout := w.shutdownWriteTimeout(); timeout > 0 {
+		if err := w.conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
 			return err
 		}
 	}
@@ -45,10 +58,20 @@ func (w *wsWriter) frame(op byte, data []byte) error {
 	if err := writeFull(w.conn, head); err != nil {
 		return err
 	}
-	return writeFull(w.conn, data)
+	if err := writeFull(w.conn, data); err != nil {
+		return err
+	}
+	if op == 8 {
+		w.closeSent = true
+	}
+	return nil
 }
 
 func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
+	if c.sessions.isDraining() {
+		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	if !c.OriginAllowed(r) {
 		http.Error(w, "origin denied", http.StatusForbidden)
 		return
@@ -114,12 +137,17 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	if err = rw.Flush(); err != nil {
 		return
 	}
+	writer := &wsWriter{conn: client, writeTimeout: c.WSWriteTimeout}
+	keyData := &backendKeyCapture{}
+	session := &wsSession{client: client, backend: backend, writer: writer, cancel: func(ctx context.Context) { c.cancelForShutdown(ctx, upstream, keyData) }}
+	if !c.sessions.add(session) {
+		return
+	}
+	defer c.sessions.remove(session)
 	if c.Metrics != nil {
 		c.Metrics.AddWebSocket(1)
 		defer c.Metrics.AddWebSocket(-1)
 	}
-	writer := &wsWriter{conn: client, writeTimeout: c.WSWriteTimeout}
-	keyData := &backendKeyCapture{}
 	type relayEnd struct {
 		cancel bool
 	}
@@ -136,7 +164,9 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 				keyData.feed(buf[:n])
 				if writer.frame(2, buf[:n]) != nil {
 					// A slow or vanished client must not keep PostgreSQL busy.
-					c.cancelDisconnectedSession(upstream, keyData)
+					if !writer.closing.Load() {
+						c.cancelDisconnectedSession(upstream, keyData)
+					}
 					return
 				}
 			}
@@ -150,7 +180,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		done <- relayEnd{cancel: err != nil}
 	}()
 	ended := <-done
-	if ended.cancel {
+	if ended.cancel && !writer.closing.Load() {
 		c.cancelDisconnectedSession(upstream, keyData)
 	}
 	_ = client.Close()

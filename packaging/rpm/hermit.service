@@ -12,6 +12,7 @@ ExecStart=/usr/bin/hermit
 DynamicUser=yes
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=15s
 MemoryAccounting=yes
 MemoryHigh=192M
 MemoryMax=256M
