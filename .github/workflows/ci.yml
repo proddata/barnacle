@@ -103,7 +103,7 @@ jobs:
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
-      - run: dnf install -y golang git tar gzip rpm-build systemd-rpm-macros
+      - run: dnf install -y golang git tar gzip rpm-build systemd-rpm-macros curl
       - uses: actions/checkout@v7
       - name: Build Fedora RPM
         run: ./packaging/rpm/build.sh
@@ -112,6 +112,19 @@ jobs:
           rpm -qpl dist/hermit-*.rpm
           rpm -qpl dist/hermit-*.rpm | grep -q '/usr/bin/hermit'
           rpm -qpl dist/hermit-*.rpm | grep -q '/hermit.service'
+      - name: Install and smoke-test RPM
+        run: |
+          dnf install -y dist/hermit-*.rpm
+          rpm -V hermit
+          HERMIT_LISTEN=127.0.0.1:18080 HERMIT_PG_ADDR=127.0.0.1:1 HERMIT_PG_SSLMODE=disable /usr/bin/hermit >/tmp/hermit-rpm.log 2>&1 &
+          hermit_pid=$!
+          trap 'kill "$hermit_pid" 2>/dev/null || true; wait "$hermit_pid" 2>/dev/null || true' EXIT
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --silent --fail http://127.0.0.1:18080/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/hermit-rpm.log
+          exit 1
       - uses: actions/upload-artifact@v7
         with:
           name: hermit-fedora-rpm
