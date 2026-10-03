@@ -111,7 +111,7 @@ jobs:
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
-      - run: dnf install -y golang git tar gzip rpm-build systemd-rpm-macros curl
+      - run: dnf install -y golang git tar gzip rpm-build systemd-rpm-macros systemd curl
       - uses: actions/checkout@v7
       - name: Build Fedora RPM
         run: ./packaging/rpm/build.sh
@@ -124,6 +124,7 @@ jobs:
         run: |
           dnf install -y dist/hermit-*.rpm
           rpm -V hermit
+          systemd-analyze verify hermit.service
           HERMIT_LISTEN=127.0.0.1:18080 HERMIT_PG_ADDR=127.0.0.1:1 HERMIT_PG_SSLMODE=disable /usr/bin/hermit >/tmp/hermit-rpm.log 2>&1 &
           hermit_pid=$!
           trap 'kill "$hermit_pid" 2>/dev/null || true; wait "$hermit_pid" 2>/dev/null || true' EXIT
