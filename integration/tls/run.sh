@@ -54,6 +54,23 @@ if [ "$ready" != true ]; then
     exit 1
 fi
 
+log_canary="hermit-log-canary-$$"
+log_probe="hermit-log-probe-$$"
+curl --silent --show-error --fail --cacert "$tls_dir/ca.crt" \
+    -H "Authorization: Bearer $log_canary" \
+    -H "Neon-Connection-String: postgres://test:$log_canary@localhost/test" \
+    -H "Cookie: hermit_access_token=$log_canary" \
+    "https://127.0.0.1:8443/healthz?probe=$log_probe" >/dev/null
+proxy_logs=$(docker compose -f compose.yaml -f integration/tls/compose.yaml logs --no-color haproxy hermit)
+if ! printf '%s\n' "$proxy_logs" | grep -Fq "$log_probe"; then
+    echo 'HAProxy did not log the canary request path' >&2
+    exit 1
+fi
+if printf '%s\n' "$proxy_logs" | grep -Fq "$log_canary"; then
+    echo 'an authentication or connection-string header leaked into proxy logs' >&2
+    exit 1
+fi
+
 HERMIT_BASE_URL=https://127.0.0.1:8443 \
 NODE_EXTRA_CA_CERTS="$tls_dir/ca.crt" \
 TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit \
