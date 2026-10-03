@@ -40,6 +40,7 @@ jobs:
       - run: npm ci --prefix integration
       - name: Neon driver integration tests
         env:
+          HERMIT_BROWSER_CORS: '1'
           HERMIT_PG_ADDR: 127.0.0.1:5432
           HERMIT_PG_SSLMODE: disable
           HERMIT_PG_USER: hermit

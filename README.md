@@ -234,7 +234,7 @@ TEST_DATABASE_URL='postgres://hermit:hermit_dev_password@localhost:5432/hermit' 
 ./integration/run.sh
 ```
 
-The integration suite installs `@neondatabase/serverless` and `ws` from npm using the committed lockfile. [CI](.github/workflows/ci.yml) runs Go tests with the race detector on Ubuntu and checks the Fedora RPM in an independent job. The direct integration runner also sends SIGTERM to a second Hermit process with HTTP and WebSocket queries active; it checks the HTTP response, WebSocket close code, PostgreSQL cleanup, and process exit. The WebSocket frame and PostgreSQL key parsers have Go fuzz targets in `internal/pgws/`.
+The integration suite installs `@neondatabase/serverless` and `ws` from npm using the committed lockfile. [CI](.github/workflows/ci.yml) runs Go tests with the race detector on Ubuntu, checks browser CORS and WebSocket origins in headless Chrome, and builds the Fedora RPM in an independent job. The direct integration runner also sends SIGTERM to a second Hermit process with HTTP and WebSocket queries active; it checks the HTTP response, WebSocket close code, PostgreSQL cleanup, and process exit. Run the browser check locally with `HERMIT_BROWSER_CORS=1 ./integration/run.sh` when Chrome or Chromium is installed. The WebSocket frame and PostgreSQL key parsers have Go fuzz targets in `internal/pgws/`.
 
 To verify Compose's upstream TLS directly, run `node integration/pg-tls.mjs` while the stack is up. It asks PostgreSQL's `pg_stat_ssl` view whether the current HTTP and WebSocket sessions use TLS. The Go suite also checks that WebSocket connections reject plaintext servers and certificates with the wrong hostname.
 
