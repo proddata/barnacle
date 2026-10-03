@@ -1,4 +1,4 @@
-package main
+package gateway
 
 import (
 	"context"
@@ -22,9 +22,9 @@ import (
 
 const oidcCookieName = "hermit_access_token"
 
-var errInvalidToken = errors.New("invalid access token")
+var ErrInvalidToken = errors.New("invalid access token")
 
-type oidcGate struct {
+type OIDCGate struct {
 	issuer, audience, jwksURL string
 	client                    *http.Client
 	mu                        sync.Mutex
@@ -44,7 +44,7 @@ type jwkSet struct {
 	} `json:"keys"`
 }
 
-func newOIDCGate(ctx context.Context, issuer, audience string, client *http.Client) (*oidcGate, error) {
+func NewOIDCGate(ctx context.Context, issuer, audience string, client *http.Client) (*OIDCGate, error) {
 	if issuer == "" || audience == "" {
 		return nil, errors.New("OIDC issuer and audience are both required")
 	}
@@ -71,7 +71,7 @@ func newOIDCGate(ctx context.Context, issuer, audience string, client *http.Clie
 	if err := checkOIDCURL(metadata.JWKSURI); err != nil {
 		return nil, err
 	}
-	gate := &oidcGate{issuer: issuer, audience: audience, jwksURL: metadata.JWKSURI, client: client}
+	gate := &OIDCGate{issuer: issuer, audience: audience, jwksURL: metadata.JWKSURI, client: client}
 	if err := gate.refresh(ctx); err != nil {
 		return nil, fmt.Errorf("OIDC keys unavailable: %w", err)
 	}
@@ -120,13 +120,13 @@ func fetchOIDCJSON(ctx context.Context, client *http.Client, address string, tar
 	return nil
 }
 
-func (g *oidcGate) refresh(ctx context.Context) error {
+func (g *OIDCGate) refresh(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.refreshLocked(ctx)
 }
 
-func (g *oidcGate) refreshLocked(ctx context.Context) error {
+func (g *OIDCGate) refreshLocked(ctx context.Context) error {
 	var set jwkSet
 	if err := fetchOIDCJSON(ctx, g.client, g.jwksURL, &set); err != nil {
 		return err
@@ -159,7 +159,7 @@ func (g *oidcGate) refreshLocked(ctx context.Context) error {
 	return nil
 }
 
-func (g *oidcGate) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+func (g *OIDCGate) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if time.Since(g.refreshed) >= 5*time.Minute {
@@ -171,7 +171,7 @@ func (g *oidcGate) key(ctx context.Context, kid string) (*rsa.PublicKey, error) 
 		return key, nil
 	}
 	if time.Since(g.unknownRefreshed) < time.Second {
-		return nil, errInvalidToken
+		return nil, ErrInvalidToken
 	}
 	g.unknownRefreshed = time.Now()
 	if err := g.refreshLocked(ctx); err != nil {
@@ -180,71 +180,71 @@ func (g *oidcGate) key(ctx context.Context, kid string) (*rsa.PublicKey, error) 
 	if key := g.keys[kid]; key != nil {
 		return key, nil
 	}
-	return nil, errInvalidToken
+	return nil, ErrInvalidToken
 }
 
-func (g *oidcGate) verify(ctx context.Context, token string) error {
+func (g *OIDCGate) verify(ctx context.Context, token string) error {
 	if len(token) == 0 || len(token) > 16<<10 {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	var header struct {
 		Alg, Typ, Kid string
 		Crit          json.RawMessage
 	}
 	if json.Unmarshal(headerBytes, &header) != nil || header.Alg != "RS256" || header.Kid == "" || len(header.Crit) > 0 {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	if typ := strings.ToLower(header.Typ); typ != "at+jwt" && typ != "application/at+jwt" {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	key, err := g.key(ctx, header.Kid)
 	if err != nil {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature) != nil {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	var claims map[string]json.RawMessage
 	if json.Unmarshal(claimsBytes, &claims) != nil {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	var issuer, subject, clientID, jti string
 	if json.Unmarshal(claims["iss"], &issuer) != nil || issuer != g.issuer ||
 		json.Unmarshal(claims["sub"], &subject) != nil || subject == "" ||
 		json.Unmarshal(claims["client_id"], &clientID) != nil || clientID == "" ||
 		json.Unmarshal(claims["jti"], &jti) != nil || jti == "" || !audienceMatches(claims["aud"], g.audience) {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	now := time.Now().Unix()
 	exp, valid := numericDate(claims["exp"])
 	if !valid || now >= exp+30 {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	iat, valid := numericDate(claims["iat"])
 	if !valid || iat > now+30 || exp <= iat {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	if raw := claims["nbf"]; len(raw) > 0 {
 		nbf, valid := numericDate(raw)
 		if !valid || nbf > now+30 {
-			return errInvalidToken
+			return ErrInvalidToken
 		}
 	}
 	return nil
@@ -280,24 +280,26 @@ func bearerToken(header string) string {
 	return token
 }
 
-func (c config) authorizeHTTP(w http.ResponseWriter, r *http.Request) bool {
-	if c.oidc == nil {
+func (c Config) AuthorizeHTTP(w http.ResponseWriter, r *http.Request) bool {
+	if c.OIDC == nil {
 		return true
 	}
-	if err := c.oidc.verify(r.Context(), bearerToken(r.Header.Get("Authorization"))); err == nil {
+	if err := c.OIDC.verify(r.Context(), bearerToken(r.Header.Get("Authorization"))); err == nil {
 		return true
 	}
 	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-	apiError(w, http.StatusUnauthorized, errInvalidToken)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(map[string]any{"message": ErrInvalidToken.Error(), "code": "HERMIT_ERROR"})
 	return false
 }
 
-func (c config) authorizeWebSocket(w http.ResponseWriter, r *http.Request) bool {
-	if c.oidc == nil {
+func (c Config) AuthorizeWebSocket(w http.ResponseWriter, r *http.Request) bool {
+	if c.OIDC == nil {
 		return true
 	}
 	cookie, err := r.Cookie(oidcCookieName)
-	if err == nil && c.oidc.verify(r.Context(), cookie.Value) == nil {
+	if err == nil && c.OIDC.verify(r.Context(), cookie.Value) == nil {
 		return true
 	}
 	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)

@@ -1,4 +1,4 @@
-package main
+package sqlhttp
 
 import (
 	"bytes"
@@ -86,7 +86,7 @@ func (w *gzipResponseWriter) Flush() {
 	}
 }
 
-func gzipSQL(next http.HandlerFunc) http.HandlerFunc {
+func Gzip(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
 		if !acceptsGzip(r.Header.Get("Accept-Encoding")) {

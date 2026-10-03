@@ -1,4 +1,4 @@
-package main
+package sqlhttp
 
 import (
 	"context"
@@ -6,10 +6,11 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/proddata/hermit/internal/gateway"
 )
 
 func TestConnectionConfigLocksUpstreamAndForwardsBearer(t *testing.T) {
-	cfg := config{pgAddr: "127.0.0.1:5432", pgUser: "default_user", pgDatabase: "default_db", pgSSLMode: "disable"}
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGUser: "default_user", PGDatabase: "default_db", PGSSLMode: "disable"}}
 	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
 	req.Header.Set("Neon-Connection-String", "postgres://app@remote.example:6543/appdb")
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -28,8 +29,22 @@ func TestConnectionConfigLocksUpstreamAndForwardsBearer(t *testing.T) {
 		t.Fatalf("OAuth token = %q, %v", token, err)
 	}
 }
+
+func TestConnectionConfigUsesAllowedRouteAndTLSName(t *testing.T) {
+	allowed, err := gateway.ParseAllowedPGAddrs("db.internal:5432")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := New(&gateway.Config{PGAllowedAddrs: allowed, PGSSLMode: "require"})
+	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
+	req.Header.Set("Neon-Connection-String", "postgres://app:secret@db.internal/app")
+	pgcfg, err := cfg.connectionConfig(req)
+	if err != nil || pgcfg.Host != "db.internal" || pgcfg.Port != 5432 || pgcfg.TLSConfig.ServerName != "db.internal" {
+		t.Fatalf("HTTP route = %#v, %v", pgcfg, err)
+	}
+}
 func TestConnectionConfigRequiresCredential(t *testing.T) {
-	cfg := config{pgAddr: "127.0.0.1:5432", pgUser: "app", pgDatabase: "app", pgSSLMode: "disable"}
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGUser: "app", PGDatabase: "app", PGSSLMode: "disable"}}
 	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
 	if _, err := cfg.connectionConfig(req); err == nil {
 		t.Fatal("accepted anonymous request")
@@ -40,7 +55,7 @@ func TestConnectionConfigRequiresCredential(t *testing.T) {
 	}
 }
 func TestOIDCConnectionRequiresOAuth(t *testing.T) {
-	cfg := config{pgAddr: "127.0.0.1:5432", pgSSLMode: "disable", oidc: &oidcGate{}}
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable", OIDC: &gateway.OIDCGate{}}}
 	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
 	req.Header.Set("Neon-Connection-String", "postgres://app:legacy-password@remote.example/appdb?require_auth=scram-sha-256")
 	req.Header.Set("Authorization", "Bearer signed-access-token")
@@ -55,22 +70,6 @@ func TestOIDCConnectionRequiresOAuth(t *testing.T) {
 	token, err := pgcfg.OAuthTokenProvider(context.Background())
 	if err != nil || token != "signed-access-token" {
 		t.Fatalf("OAuth token = %q, %v", token, err)
-	}
-}
-func TestOriginPolicy(t *testing.T) {
-	cfg := config{allowedOrigin: "https://app.example.com"}
-	req := httptest.NewRequest("POST", "http://localhost:8080/sql", nil)
-	req.Header.Set("Origin", "http://localhost:8080")
-	if !cfg.originAllowed(req) {
-		t.Fatal("same origin denied")
-	}
-	req.Header.Set("Origin", "https://app.example.com")
-	if !cfg.originAllowed(req) {
-		t.Fatal("configured origin denied")
-	}
-	req.Header.Set("Origin", "https://elsewhere.example")
-	if cfg.originAllowed(req) {
-		t.Fatal("unconfigured origin allowed")
 	}
 }
 

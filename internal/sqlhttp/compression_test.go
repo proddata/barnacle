@@ -1,4 +1,4 @@
-package main
+package sqlhttp
 
 import (
 	"compress/gzip"
@@ -10,7 +10,7 @@ import (
 )
 
 func TestGzipSQLCompressesLargeResponses(t *testing.T) {
-	handler := gzipSQL(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Gzip(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"payload": strings.Repeat("x", 8192)})
 	})
 	request := httptest.NewRequest(http.MethodPost, "/sql", nil)
@@ -34,7 +34,7 @@ func TestGzipSQLCompressesLargeResponses(t *testing.T) {
 }
 
 func TestGzipSQLLeavesSmallResponsesPlain(t *testing.T) {
-	handler := gzipSQL(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Gzip(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "small error"})
 	})
 	for _, accept := range []string{"gzip", "gzip;q=0"} {

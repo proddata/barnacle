@@ -1,4 +1,4 @@
-package main
+package gateway
 
 import (
 	"crypto/ecdsa"
@@ -60,8 +60,8 @@ func TestWebSocketUpstreamTLSVerifiesCertificate(t *testing.T) {
 		secured := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}})
 		_ = secured.Handshake()
 	}()
-	cfg := config{pgSSLMode: "require", pgRootCAs: roots}
-	conn, err := cfg.dialPostgres(listener.Addr().String())
+	cfg := Config{PGSSLMode: "require", PGRootCAs: roots}
+	conn, err := cfg.DialPostgres(listener.Addr().String())
 	if err == nil {
 		conn.Close()
 		t.Fatal("accepted a certificate for localhost when dialing 127.0.0.1")
@@ -91,7 +91,7 @@ func TestWebSocketUpstreamTLSRejectsPlaintext(t *testing.T) {
 			_, _ = conn.Write([]byte{'N'})
 		}
 	}()
-	if conn, err := (config{pgSSLMode: "require"}).dialPostgres(listener.Addr().String()); err == nil {
+	if conn, err := (Config{PGSSLMode: "require"}).DialPostgres(listener.Addr().String()); err == nil {
 		conn.Close()
 		t.Fatal("accepted a plaintext PostgreSQL server")
 	}

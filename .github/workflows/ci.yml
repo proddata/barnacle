@@ -35,6 +35,7 @@ jobs:
           cache: npm
           cache-dependency-path: integration/package-lock.json
       - run: go test ./...
+      - run: go test -race ./...
       - run: go vet ./...
       - run: npm ci --prefix integration
       - name: Neon driver integration tests
@@ -79,7 +80,7 @@ jobs:
           --health-timeout 2s
           --health-retries 15
     steps:
-      - run: dnf install -y golang nodejs npm curl git tar gzip rpm-build systemd-rpm-macros
+      - run: dnf install -y golang nodejs npm curl git
       - uses: actions/checkout@v7
       - run: go test ./...
       - run: go vet ./...
@@ -93,6 +94,12 @@ jobs:
           TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@postgres:5432/hermit
         run: ./integration/run.sh
 
+  fedora-rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - run: dnf install -y golang git tar gzip rpm-build systemd-rpm-macros
+      - uses: actions/checkout@v7
       - name: Build Fedora RPM
         run: ./packaging/rpm/build.sh
       - name: Inspect RPM contents

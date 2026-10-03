@@ -1,4 +1,4 @@
-package main
+package pgws
 
 import (
 	"bufio"
@@ -48,12 +48,12 @@ func (w *wsWriter) frame(op byte, data []byte) error {
 	return writeFull(w.conn, data)
 }
 
-func (c config) websocket(w http.ResponseWriter, r *http.Request) {
-	if !c.originAllowed(r) {
+func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
+	if !c.OriginAllowed(r) {
 		http.Error(w, "origin denied", http.StatusForbidden)
 		return
 	}
-	if !c.authorizeWebSocket(w, r) {
+	if !c.AuthorizeWebSocket(w, r) {
 		return
 	}
 	if r.Header.Get("Upgrade") != "websocket" || !strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") || r.Header.Get("Sec-Websocket-Version") != "13" {
@@ -67,7 +67,7 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addresses := r.URL.Query()["address"]
-	if len(c.pgAllowedAddrs) > 0 && len(addresses) > 1 {
+	if len(c.PGAllowedAddrs) > 0 && len(addresses) > 1 {
 		http.Error(w, "one PostgreSQL address expected", http.StatusBadRequest)
 		return
 	}
@@ -75,17 +75,17 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 	if len(addresses) == 1 {
 		requested = addresses[0]
 	}
-	upstream, err := c.upstreamAddr(requested)
+	upstream, err := c.UpstreamAddr(requested)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if !c.acquireUpstream() {
+	if !c.AcquireUpstream() {
 		http.Error(w, "postgres connection limit reached", http.StatusServiceUnavailable)
 		return
 	}
-	defer c.releaseUpstream()
-	backend, err := c.dialPostgres(upstream)
+	defer c.ReleaseUpstream()
+	backend, err := c.DialPostgres(upstream)
 	if err != nil {
 		http.Error(w, "postgres unavailable", http.StatusBadGateway)
 		return
@@ -101,8 +101,8 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer client.Close()
-	if c.wsWriteTimeout > 0 {
-		if err := client.SetWriteDeadline(time.Now().Add(c.wsWriteTimeout)); err != nil {
+	if c.WSWriteTimeout > 0 {
+		if err := client.SetWriteDeadline(time.Now().Add(c.WSWriteTimeout)); err != nil {
 			return
 		}
 	}
@@ -114,11 +114,11 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 	if err = rw.Flush(); err != nil {
 		return
 	}
-	if c.metrics != nil {
-		c.metrics.websocketActive.Add(1)
-		defer c.metrics.websocketActive.Add(-1)
+	if c.Metrics != nil {
+		c.Metrics.AddWebSocket(1)
+		defer c.Metrics.AddWebSocket(-1)
 	}
-	writer := &wsWriter{conn: client, writeTimeout: c.wsWriteTimeout}
+	writer := &wsWriter{conn: client, writeTimeout: c.WSWriteTimeout}
 	keyData := &backendKeyCapture{}
 	type relayEnd struct {
 		cancel bool
@@ -130,8 +130,8 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, e := backend.Read(buf)
 			if n > 0 {
-				if c.wsIdleTimeout > 0 {
-					_ = client.SetReadDeadline(time.Now().Add(c.wsIdleTimeout))
+				if c.WSIdleTimeout > 0 {
+					_ = client.SetReadDeadline(time.Now().Add(c.WSIdleTimeout))
 				}
 				keyData.feed(buf[:n])
 				if writer.frame(2, buf[:n]) != nil {
@@ -146,7 +146,7 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	go func() {
-		err := readWS(rw.Reader, &deadlineWriter{conn: backend, timeout: c.wsWriteTimeout}, writer, client, c.wsIdleTimeout)
+		err := readWS(rw.Reader, &deadlineWriter{conn: backend, timeout: c.WSWriteTimeout}, writer, client, c.WSIdleTimeout)
 		done <- relayEnd{cancel: err != nil}
 	}()
 	ended := <-done
@@ -191,8 +191,7 @@ func readWS(reader *bufio.Reader, backend io.Writer, writer *wsWriter, client ne
 			if n < 126 {
 				return errors.New("noncanonical frame length")
 			}
-		}
-		if n == 127 {
+		} else if n == 127 {
 			if err = binary.Read(reader, binary.BigEndian, &n); err != nil {
 				return err
 			}

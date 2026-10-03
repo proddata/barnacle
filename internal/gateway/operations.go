@@ -1,21 +1,21 @@
-package main
+package gateway
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync/atomic"
 	"time"
 )
 
-type metrics struct {
+type Metrics struct {
 	websocketActive atomic.Int64
 	sqlRequests     atomic.Uint64
 	sqlErrors       atomic.Uint64
 	sqlDurationNS   atomic.Uint64
 	sqlLatency      [6]atomic.Uint64
 }
+
+func (m *Metrics) AddWebSocket(delta int64) { m.websocketActive.Add(delta) }
 
 var sqlLatencyBounds = [...]time.Duration{10 * time.Millisecond, 50 * time.Millisecond, 100 * time.Millisecond, 500 * time.Millisecond, time.Second, 5 * time.Second}
 
@@ -48,7 +48,7 @@ func (w *statusWriter) Flush() {
 	}
 }
 
-func (m *metrics) measureSQL(next http.HandlerFunc) http.HandlerFunc {
+func (m *Metrics) MeasureSQL(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		observed := &statusWriter{ResponseWriter: w}
@@ -67,7 +67,7 @@ func (m *metrics) measureSQL(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (m *metrics) serve(w http.ResponseWriter, _ *http.Request) {
+func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = fmt.Fprintf(w, "# TYPE hermit_websocket_active gauge\nhermit_websocket_active %d\n", m.websocketActive.Load())
 	_, _ = fmt.Fprintf(w, "# TYPE hermit_sql_requests_total counter\nhermit_sql_requests_total %d\n", m.sqlRequests.Load())
@@ -79,18 +79,18 @@ func (m *metrics) serve(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "hermit_sql_duration_seconds_bucket{le=\"+Inf\"} %d\nhermit_sql_duration_seconds_sum %.9f\nhermit_sql_duration_seconds_count %d\n", m.sqlRequests.Load(), float64(m.sqlDurationNS.Load())/1e9, m.sqlRequests.Load())
 }
 
-func (c config) ready(w http.ResponseWriter, _ *http.Request) {
-	if c.readyPGAddr != "" {
-		if c.readySlots != nil {
+func (c Config) Ready(w http.ResponseWriter, _ *http.Request) {
+	if c.ReadyPGAddr != "" {
+		if c.ReadySlots != nil {
 			select {
-			case c.readySlots <- struct{}{}:
-				defer func() { <-c.readySlots }()
+			case c.ReadySlots <- struct{}{}:
+				defer func() { <-c.ReadySlots }()
 			default:
 				http.Error(w, "readiness probe in progress", http.StatusServiceUnavailable)
 				return
 			}
 		}
-		backend, err := c.dialPostgres(c.readyPGAddr)
+		backend, err := c.DialPostgres(c.ReadyPGAddr)
 		if err != nil {
 			http.Error(w, "postgres unavailable", http.StatusServiceUnavailable)
 			return
@@ -98,17 +98,4 @@ func (c config) ready(w http.ResponseWriter, _ *http.Request) {
 		_ = backend.Close()
 	}
 	w.Write([]byte("ok\n"))
-}
-
-func interruptedResultKind(err error) string {
-	switch {
-	case errors.Is(err, errHTTPResultTooLarge):
-		return "result_limit"
-	case errors.Is(err, context.Canceled):
-		return "canceled"
-	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout"
-	default:
-		return "query_or_transport"
-	}
 }

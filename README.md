@@ -222,7 +222,7 @@ npm test --prefix integration
 
 The database URL's host is ignored by Hermit; PostgreSQL stays inside the Compose network. The suite covers HTTP queries and types, bearer forwarding, batches, gzip, Neon's WebSocket `Client`, and the console's SCRAM wire client.
 
-For a native development setup with PostgreSQL listening on the host, run `go test ./...` and `go vet ./...`, then use `integration/run.sh` to build and start a temporary Hermit process:
+For a native development setup with PostgreSQL listening on the host, run `go test -race ./...` and `go vet ./...`, then use `integration/run.sh` to build and start a temporary Hermit process:
 
 ```sh
 npm ci --prefix integration
@@ -234,7 +234,7 @@ TEST_DATABASE_URL='postgres://hermit:hermit_dev_password@localhost:5432/hermit' 
 ./integration/run.sh
 ```
 
-The integration suite installs `@neondatabase/serverless` and `ws` from npm using the committed lockfile. [CI](.github/workflows/ci.yml) defines Ubuntu and Fedora jobs; the Ubuntu job also builds the Docker image.
+The integration suite installs `@neondatabase/serverless` and `ws` from npm using the committed lockfile. [CI](.github/workflows/ci.yml) runs Go tests with the race detector on Ubuntu and checks the Fedora RPM in an independent job. The WebSocket frame and PostgreSQL key parsers also have Go fuzz targets in `internal/pgws/`.
 
 To verify Compose's upstream TLS directly, run `node integration/pg-tls.mjs` while the stack is up. It asks PostgreSQL's `pg_stat_ssl` view whether the current HTTP and WebSocket sessions use TLS. The Go suite also checks that WebSocket connections reject plaintext servers and certificates with the wrong hostname.
 
@@ -267,4 +267,4 @@ Each JSON line records transport, configured connections, maximum observed in-fl
 
 For large results, `node integration/large-result.mjs --transport=ws --rows=100 --row-mib=1` requests 100 MiB and reports Hermit's cgroup peak and whether the query completed. Run it with `--transport=http` for the matching HTTP request, restarting Hermit between runs. In the [observed 100 MiB comparison](benchmarks.md#100-mib-result-comparison), WebSocket stayed near 16–17 MiB; with the current pgx release, streamed HTTP peaked at 20.0 MiB for 100 rows and rejected one 100 MiB row with 413 at a 13.4 MiB peak. Raising `HERMIT_HTTP_MAX_ROW_MIB` allows the single-row case at a higher memory cost.
 
-The root Go package is the server, `web/` contains embedded browser modules, and `integration/` contains the Node suite. For source inspection only, the local Neon driver checkout is `/Users/georg/Developer/neon/serverless`; the Neon repository, including its proxy, is `/Users/georg/Developer/neon/neon`. Hermit's tests do not import either checkout.
+The root Go package wires the server together. `internal/sqlhttp/` implements SQL over HTTP, `internal/pgws/` implements the PostgreSQL WebSocket tunnel, and `internal/gateway/` holds their shared authentication, routing, TLS, limits, and metrics. `web/` contains embedded browser modules, and `integration/` contains the Node suite. Hermit's integration tests use the published Neon driver.

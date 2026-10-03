@@ -1,4 +1,4 @@
-package main
+package gateway
 
 import (
 	"crypto"
@@ -72,7 +72,7 @@ func TestOIDCAccessTokenGate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(provider.serve))
 	defer server.Close()
 	provider.issuer = server.URL
-	gate, err := newOIDCGate(t.Context(), server.URL, "hermit-api", server.Client())
+	gate, err := NewOIDCGate(t.Context(), server.URL, "hermit-api", server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,15 +86,15 @@ func TestOIDCAccessTokenGate(t *testing.T) {
 	if err := gate.verify(t.Context(), token); err != nil {
 		t.Fatalf("valid token rejected: %v", err)
 	}
-	config := config{oidc: gate, pgAddr: "127.0.0.1:1", pgSSLMode: "disable"}
+	config := Config{OIDC: gate, PGAddr: "127.0.0.1:1", PGSSLMode: "disable"}
 	validHTTP := httptest.NewRequest(http.MethodPost, "/sql", nil)
 	validHTTP.Header.Set("Authorization", "Bearer "+token)
-	if !config.authorizeHTTP(httptest.NewRecorder(), validHTTP) {
+	if !config.AuthorizeHTTP(httptest.NewRecorder(), validHTTP) {
 		t.Fatal("valid HTTP access token rejected")
 	}
 	validWS := httptest.NewRequest(http.MethodGet, "/v2", nil)
 	validWS.AddCookie(&http.Cookie{Name: oidcCookieName, Value: token})
-	if !config.authorizeWebSocket(httptest.NewRecorder(), validWS) {
+	if !config.AuthorizeWebSocket(httptest.NewRecorder(), validWS) {
 		t.Fatal("valid WebSocket access-token cookie rejected")
 	}
 	for name, change := range map[string]func(map[string]any){
@@ -145,13 +145,13 @@ func TestOIDCAccessTokenGate(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/sql", strings.NewReader(`{"query":"select 1"}`))
 	request.Header.Set("Authorization", "Bearer invalid")
 	response := httptest.NewRecorder()
-	config.sql(response, request)
+	config.AuthorizeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("HTTP gate status = %d, want 401", response.Code)
 	}
 	wsRequest := httptest.NewRequest(http.MethodGet, "/v2", nil)
 	wsResponse := httptest.NewRecorder()
-	config.websocket(wsResponse, wsRequest)
+	config.AuthorizeWebSocket(wsResponse, wsRequest)
 	if wsResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("WebSocket gate status = %d, want 401", wsResponse.Code)
 	}

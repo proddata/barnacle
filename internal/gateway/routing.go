@@ -1,4 +1,4 @@
-package main
+package gateway
 
 import (
 	"errors"
@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// canonicalPGAddr accepts one TCP destination, never a URL or a host list.
-func canonicalPGAddr(addr string) (string, error) {
+// CanonicalPGAddr accepts one TCP destination, never a URL or a host list.
+func CanonicalPGAddr(addr string) (string, error) {
 	host, portText, err := net.SplitHostPort(addr)
 	if err != nil || host == "" || strings.ContainsAny(host, "/\\@?#% \t\r\n") {
 		return "", errors.New("expected PostgreSQL host:port")
@@ -27,13 +27,13 @@ func canonicalPGAddr(addr string) (string, error) {
 	return net.JoinHostPort(host, strconv.FormatUint(port, 10)), nil
 }
 
-func parseAllowedPGAddrs(raw string) (map[string]struct{}, error) {
+func ParseAllowedPGAddrs(raw string) (map[string]struct{}, error) {
 	if raw == "" {
 		return nil, nil
 	}
 	allowed := make(map[string]struct{})
 	for _, entry := range strings.Split(raw, ",") {
-		addr, err := canonicalPGAddr(strings.TrimSpace(entry))
+		addr, err := CanonicalPGAddr(strings.TrimSpace(entry))
 		if err != nil {
 			return nil, fmt.Errorf("invalid HERMIT_PG_ALLOWED_ADDRS entry %q: %w", entry, err)
 		}
@@ -42,40 +42,40 @@ func parseAllowedPGAddrs(raw string) (map[string]struct{}, error) {
 	return allowed, nil
 }
 
-func (c config) upstreamAddr(requested string) (string, error) {
-	if len(c.pgAllowedAddrs) == 0 {
-		return c.pgAddr, nil
+func (c Config) UpstreamAddr(requested string) (string, error) {
+	if len(c.PGAllowedAddrs) == 0 {
+		return c.PGAddr, nil
 	}
 	if requested == "" {
-		if c.pgAddr != "" {
-			return c.pgAddr, nil
+		if c.PGAddr != "" {
+			return c.PGAddr, nil
 		}
 		return "", errors.New("PostgreSQL address required")
 	}
-	addr, err := canonicalPGAddr(requested)
+	addr, err := CanonicalPGAddr(requested)
 	if err != nil {
 		return "", err
 	}
-	if _, ok := c.pgAllowedAddrs[addr]; !ok {
+	if _, ok := c.PGAllowedAddrs[addr]; !ok {
 		return "", errors.New("PostgreSQL address not allowed")
 	}
 	return addr, nil
 }
 
-func (c config) httpUpstreamAddr(raw string) (string, error) {
-	if len(c.pgAllowedAddrs) == 0 || raw == "" {
-		return c.upstreamAddr("")
+func (c Config) HTTPUpstreamAddr(raw string) (string, error) {
+	if len(c.PGAllowedAddrs) == 0 || raw == "" {
+		return c.UpstreamAddr("")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return "", errors.New("invalid PostgreSQL connection string")
 	}
 	if u.Host == "" {
-		return c.upstreamAddr("")
+		return c.UpstreamAddr("")
 	}
 	port := u.Port()
 	if port == "" {
 		port = "5432"
 	}
-	return c.upstreamAddr(net.JoinHostPort(u.Hostname(), port))
+	return c.UpstreamAddr(net.JoinHostPort(u.Hostname(), port))
 }

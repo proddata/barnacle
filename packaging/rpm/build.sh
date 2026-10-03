@@ -20,6 +20,7 @@ cd "$repo_dir"
 go mod download
 cp go.mod go.sum ./*.go README.md LICENSE THIRD-PARTY-NOTICES.md "$source_dir/"
 cp -R web "$source_dir/"
+cp -R internal "$source_dir/"
 cp -R THIRD-PARTY-LICENSES "$source_dir/"
 cp packaging/rpm/hermit.service packaging/rpm/hermit.sysconfig "$source_dir/packaging/rpm/"
 tar -C "$build_dir/SOURCES" -czf "$build_dir/SOURCES/hermit-$version.tar.gz" "hermit-$version"

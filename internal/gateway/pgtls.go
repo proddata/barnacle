@@ -1,4 +1,4 @@
-package main
+package gateway
 
 import (
 	"crypto/tls"
@@ -13,7 +13,7 @@ import (
 
 var pgSSLRequest = [8]byte{0, 0, 0, 8, 4, 210, 22, 47}
 
-func loadPGRootCAs(path string) (*x509.CertPool, error) {
+func LoadPGRootCAs(path string) (*x509.CertPool, error) {
 	if path == "" {
 		return nil, nil // Go's system trust store
 	}
@@ -28,19 +28,19 @@ func loadPGRootCAs(path string) (*x509.CertPool, error) {
 	return roots, nil
 }
 
-func (c config) pgTLSConfig(host string) *tls.Config {
-	return &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host, RootCAs: c.pgRootCAs}
+func (c Config) PGTLSConfig(host string) *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host, RootCAs: c.PGRootCAs}
 }
 
-func (c config) dialPostgres(addr string) (net.Conn, error) {
+func (c Config) DialPostgres(addr string) (net.Conn, error) {
 	backend, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	if c.pgSSLMode == "disable" {
+	if c.PGSSLMode == "disable" {
 		return backend, nil
 	}
-	if c.pgSSLMode != "require" {
+	if c.PGSSLMode != "require" {
 		backend.Close()
 		return nil, errors.New("HERMIT_PG_SSLMODE must be disable or require")
 	}
@@ -66,7 +66,7 @@ func (c config) dialPostgres(addr string) (net.Conn, error) {
 		backend.Close()
 		return nil, err
 	}
-	secured := tls.Client(backend, c.pgTLSConfig(host))
+	secured := tls.Client(backend, c.PGTLSConfig(host))
 	if err := secured.Handshake(); err != nil {
 		backend.Close()
 		return nil, err
@@ -76,4 +76,18 @@ func (c config) dialPostgres(addr string) (net.Conn, error) {
 		return nil, err
 	}
 	return secured, nil
+}
+
+func writeFull(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return nil
 }

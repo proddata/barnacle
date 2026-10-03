@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -12,20 +11,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
-)
 
-type config struct {
-	listen, pgAddr, readyPGAddr, allowedOrigin                  string
-	pgDatabase, pgUser, pgPassword, pgSSLMode                   string
-	pgAllowedAddrs                                              map[string]struct{}
-	pgRootCAs                                                   *x509.CertPool
-	consoleEnabled                                              bool
-	queryTimeout, wsIdleTimeout, wsWriteTimeout                 time.Duration
-	upstreamSlots, cancelSlots, httpSlots, readySlots           chan struct{}
-	maxHTTPRowBytes, maxHTTPBufferedBytes, maxHTTPResponseBytes int64
-	oidc                                                        *oidcGate
-	metrics                                                     *metrics
-}
+	"github.com/proddata/hermit/internal/gateway"
+	"github.com/proddata/hermit/internal/pgws"
+	"github.com/proddata/hermit/internal/sqlhttp"
+)
 
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -75,7 +65,7 @@ func main() {
 		slog.Error("invalid HERMIT_HTTP_MAX_RESPONSE_MIB")
 		os.Exit(1)
 	}
-	allowedAddrs, err := parseAllowedPGAddrs(os.Getenv("HERMIT_PG_ALLOWED_ADDRS"))
+	allowedAddrs, err := gateway.ParseAllowedPGAddrs(os.Getenv("HERMIT_PG_ALLOWED_ADDRS"))
 	if err != nil {
 		slog.Error("invalid PostgreSQL routing configuration", "error", err)
 		os.Exit(1)
@@ -85,7 +75,7 @@ func main() {
 		defaultPGAddr = "127.0.0.1:5432"
 	}
 	if defaultPGAddr != "" {
-		defaultPGAddr, err = canonicalPGAddr(defaultPGAddr)
+		defaultPGAddr, err = gateway.CanonicalPGAddr(defaultPGAddr)
 		if err != nil {
 			slog.Error("invalid HERMIT_PG_ADDR", "error", err)
 			os.Exit(1)
@@ -93,7 +83,7 @@ func main() {
 	}
 	readyPGAddr := os.Getenv("HERMIT_READY_PG_ADDR")
 	if readyPGAddr != "" {
-		readyPGAddr, err = canonicalPGAddr(readyPGAddr)
+		readyPGAddr, err = gateway.CanonicalPGAddr(readyPGAddr)
 		if err != nil {
 			slog.Error("invalid HERMIT_READY_PG_ADDR", "error", err)
 			os.Exit(1)
@@ -104,39 +94,39 @@ func main() {
 		slog.Error("HERMIT_PG_SSLMODE must be require or disable")
 		os.Exit(1)
 	}
-	pgRootCAs, err := loadPGRootCAs(os.Getenv("HERMIT_PG_CA_FILE"))
+	pgRootCAs, err := gateway.LoadPGRootCAs(os.Getenv("HERMIT_PG_CA_FILE"))
 	if err != nil {
 		slog.Error("invalid HERMIT_PG_CA_FILE", "error", err)
 		os.Exit(1)
 	}
-	cfg := config{
-		listen:               env("HERMIT_LISTEN", ":8080"),
-		pgAddr:               defaultPGAddr,
-		readyPGAddr:          readyPGAddr,
-		pgAllowedAddrs:       allowedAddrs,
-		pgDatabase:           env("HERMIT_PG_DATABASE", "postgres"),
-		pgUser:               env("HERMIT_PG_USER", "postgres"),
-		pgPassword:           os.Getenv("HERMIT_PG_PASSWORD"),
-		pgSSLMode:            pgSSLMode,
-		pgRootCAs:            pgRootCAs,
-		allowedOrigin:        os.Getenv("HERMIT_ALLOWED_ORIGIN"),
-		consoleEnabled:       strings.EqualFold(os.Getenv("HERMIT_CONSOLE"), "true"),
-		queryTimeout:         timeout,
-		wsIdleTimeout:        wsIdleTimeout,
-		wsWriteTimeout:       wsWriteTimeout,
-		upstreamSlots:        make(chan struct{}, maxConnections),
-		cancelSlots:          make(chan struct{}, min(8, maxConnections)),
-		httpSlots:            make(chan struct{}, maxHTTPQueries),
-		readySlots:           make(chan struct{}, 1),
-		maxHTTPRowBytes:      int64(maxHTTPRowMiB) << 20,
-		maxHTTPBufferedBytes: int64(maxHTTPBufferedMiB) << 20,
-		maxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
-		metrics:              &metrics{},
+	cfg := gateway.Config{
+		Listen:               env("HERMIT_LISTEN", ":8080"),
+		PGAddr:               defaultPGAddr,
+		ReadyPGAddr:          readyPGAddr,
+		PGAllowedAddrs:       allowedAddrs,
+		PGDatabase:           env("HERMIT_PG_DATABASE", "postgres"),
+		PGUser:               env("HERMIT_PG_USER", "postgres"),
+		PGPassword:           os.Getenv("HERMIT_PG_PASSWORD"),
+		PGSSLMode:            pgSSLMode,
+		PGRootCAs:            pgRootCAs,
+		AllowedOrigin:        os.Getenv("HERMIT_ALLOWED_ORIGIN"),
+		ConsoleEnabled:       strings.EqualFold(os.Getenv("HERMIT_CONSOLE"), "true"),
+		QueryTimeout:         timeout,
+		WSIdleTimeout:        wsIdleTimeout,
+		WSWriteTimeout:       wsWriteTimeout,
+		UpstreamSlots:        make(chan struct{}, maxConnections),
+		CancelSlots:          make(chan struct{}, min(8, maxConnections)),
+		HTTPSlots:            make(chan struct{}, maxHTTPQueries),
+		ReadySlots:           make(chan struct{}, 1),
+		MaxHTTPRowBytes:      int64(maxHTTPRowMiB) << 20,
+		MaxHTTPBufferedBytes: int64(maxHTTPBufferedMiB) << 20,
+		MaxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
+		Metrics:              &gateway.Metrics{},
 	}
 	issuer := os.Getenv("HERMIT_OIDC_ISSUER")
 	audience := os.Getenv("HERMIT_OIDC_AUDIENCE")
 	if issuer != "" || audience != "" {
-		cfg.oidc, err = newOIDCGate(context.Background(), issuer, audience, nil)
+		cfg.OIDC, err = gateway.NewOIDCGate(context.Background(), issuer, audience, nil)
 		if err != nil {
 			slog.Error("OIDC configuration failed", "error", err)
 			os.Exit(1)
@@ -144,22 +134,24 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
-	mux.HandleFunc("GET /readyz", cfg.ready)
-	mux.HandleFunc("POST /sql", cfg.metrics.measureSQL(gzipSQL(cfg.sql)))
-	mux.HandleFunc("OPTIONS /sql", cfg.preflight)
+	mux.HandleFunc("GET /readyz", cfg.Ready)
+	sqlHandler := sqlhttp.New(&cfg)
+	wsHandler := pgws.New(&cfg)
+	mux.HandleFunc("POST /sql", cfg.Metrics.MeasureSQL(sqlhttp.Gzip(sqlHandler.Serve)))
+	mux.HandleFunc("OPTIONS /sql", cfg.Preflight)
 	if strings.EqualFold(os.Getenv("HERMIT_METRICS"), "true") {
-		mux.HandleFunc("GET /metrics", cfg.metrics.serve)
+		mux.HandleFunc("GET /metrics", cfg.Metrics.Serve)
 	} else {
 		mux.HandleFunc("GET /metrics", http.NotFound)
 	}
-	mux.HandleFunc("GET /v1", cfg.websocket)
-	mux.HandleFunc("GET /v2", cfg.websocket)
-	if cfg.consoleEnabled {
+	mux.HandleFunc("GET /v1", wsHandler.Serve)
+	mux.HandleFunc("GET /v2", wsHandler.Serve)
+	if cfg.ConsoleEnabled {
 		mux.HandleFunc("GET /", console)
 		mux.HandleFunc("GET /console.mjs", consoleScript)
 		mux.HandleFunc("GET /pgwire.mjs", consoleScript)
 	}
-	server := &http.Server{Addr: cfg.listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10}
+	server := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -168,7 +160,7 @@ func main() {
 		defer cancel()
 		_ = server.Shutdown(shutdown)
 	}()
-	slog.Info("hermit listening", "address", cfg.listen, "postgres", cfg.pgAddr)
+	slog.Info("hermit listening", "address", cfg.Listen, "postgres", cfg.PGAddr)
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
@@ -181,35 +173,4 @@ func positiveIntEnv(key string, fallback int) (int, error) {
 		return 0, errors.New("invalid positive value")
 	}
 	return value, nil
-}
-
-func (c config) acquireUpstream() bool {
-	select {
-	case c.upstreamSlots <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (c config) releaseUpstream() {
-	<-c.upstreamSlots
-}
-
-func (c config) acquireHTTP() bool {
-	if c.httpSlots == nil {
-		return true
-	}
-	select {
-	case c.httpSlots <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (c config) releaseHTTP() {
-	if c.httpSlots != nil {
-		<-c.httpSlots
-	}
 }

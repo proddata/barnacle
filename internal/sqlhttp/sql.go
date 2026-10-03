@@ -1,4 +1,4 @@
-package main
+package sqlhttp
 
 import (
 	"context"
@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/proddata/hermit/internal/gateway"
 )
 
 const pgRowMessageOverhead = 16 << 10 // PostgreSQL allows at most 1,600 columns.
@@ -72,7 +73,7 @@ func apiError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]any{"message": err.Error(), "code": "HERMIT_ERROR"})
 }
 
-func (c config) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
+func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	raw := r.Header.Get("Neon-Connection-String")
 	authorization := r.Header.Get("Authorization")
 	if authorization == "" && raw == "" {
@@ -88,12 +89,12 @@ func (c config) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 		}
 	}
 	if raw == "" {
-		if c.pgAddr == "" {
+		if c.PGAddr == "" {
 			return nil, errors.New("Neon-Connection-String required without HERMIT_PG_ADDR")
 		}
-		raw = (&url.URL{Scheme: "postgres", User: url.UserPassword(c.pgUser, c.pgPassword), Host: c.pgAddr, Path: "/" + c.pgDatabase}).String()
+		raw = (&url.URL{Scheme: "postgres", User: url.UserPassword(c.PGUser, c.PGPassword), Host: c.PGAddr, Path: "/" + c.PGDatabase}).String()
 	}
-	upstream, err := c.httpUpstreamAddr(r.Header.Get("Neon-Connection-String"))
+	upstream, err := c.HTTPUpstreamAddr(r.Header.Get("Neon-Connection-String"))
 	if err != nil {
 		return nil, err
 	}
@@ -112,13 +113,13 @@ func (c config) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	pgcfg.Host = host
 	pgcfg.Port = uint16(port)
 	pgcfg.Fallbacks = nil
-	if c.maxHTTPRowBytes > 0 {
-		pgcfg.MaxProtocolMessageBodyLen = int(c.maxHTTPRowBytes) + pgRowMessageOverhead
+	if c.MaxHTTPRowBytes > 0 {
+		pgcfg.MaxProtocolMessageBodyLen = int(c.MaxHTTPRowBytes) + pgRowMessageOverhead
 	}
-	if c.pgSSLMode == "disable" {
+	if c.PGSSLMode == "disable" {
 		pgcfg.TLSConfig = nil
-	} else if c.pgSSLMode == "require" {
-		pgcfg.TLSConfig = c.pgTLSConfig(host)
+	} else if c.PGSSLMode == "require" {
+		pgcfg.TLSConfig = c.PGTLSConfig(host)
 	} else {
 		return nil, errors.New("HERMIT_PG_SSLMODE must be disable or require")
 	}
@@ -131,7 +132,7 @@ func (c config) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 		pgcfg.OAuthTokenProvider = func(context.Context) (string, error) {
 			return bearer, nil
 		}
-		if c.oidc != nil {
+		if c.OIDC != nil {
 			// A verified access token must only be sent with PostgreSQL OAuth.
 			// Reject SCRAM/password/unauthenticated server configurations.
 			pgcfg.Password = ""
@@ -147,11 +148,11 @@ func (c config) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	return pgcfg, nil
 }
 
-func (c config) sql(w http.ResponseWriter, r *http.Request) {
-	if !c.allowOrigin(w, r) {
+func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
+	if !c.AllowOrigin(w, r) {
 		return
 	}
-	if !c.authorizeHTTP(w, r) {
+	if !c.AuthorizeHTTP(w, r) {
 		return
 	}
 	var req queryRequest
@@ -178,11 +179,11 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, errors.New("expected 1 to 100 queries"))
 		return
 	}
-	if !c.acquireHTTP() {
+	if !c.AcquireHTTP() {
 		apiError(w, http.StatusServiceUnavailable, errors.New("HTTP query limit reached"))
 		return
 	}
-	defer c.releaseHTTP()
+	defer c.ReleaseHTTP()
 	for _, q := range queries {
 		if strings.TrimSpace(q.Query) == "" {
 			apiError(w, 400, errors.New("empty query"))
@@ -194,12 +195,12 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, err)
 		return
 	}
-	if !c.acquireUpstream() {
+	if !c.AcquireUpstream() {
 		apiError(w, http.StatusServiceUnavailable, errors.New("postgres connection limit reached"))
 		return
 	}
-	defer c.releaseUpstream()
-	ctx, cancel := context.WithTimeout(r.Context(), c.queryTimeout)
+	defer c.ReleaseUpstream()
+	ctx, cancel := context.WithTimeout(r.Context(), c.QueryTimeout)
 	defer cancel()
 	conn, err := pgx.ConnectConfig(ctx, pgcfg)
 	if err != nil {
@@ -209,13 +210,13 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(context.Background())
 	arrayMode := strings.EqualFold(r.Header.Get("Neon-Array-Mode"), "true")
 	rawText := strings.EqualFold(r.Header.Get("Neon-Raw-Text-Output"), "true")
-	rowLimit := c.maxHTTPRowBytes
+	rowLimit := c.MaxHTTPRowBytes
 	if batch {
-		rowLimit = min(rowLimit, c.maxHTTPBufferedBytes)
+		rowLimit = min(rowLimit, c.MaxHTTPBufferedBytes)
 	}
 	conn.PgConn().Frontend().SetMaxBodyLen(int(rowLimit) + pgRowMessageOverhead)
 	results := make([]result, 0, len(queries))
-	bufferedRemaining := c.maxHTTPBufferedBytes
+	bufferedRemaining := c.MaxHTTPBufferedBytes
 	var runner interface {
 		Query(context.Context, string, ...any) (pgx.Rows, error)
 	} = conn
@@ -261,12 +262,12 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !batch && canStream(rows, conn.TypeMap(), rawText) {
-			if err := streamSingle(w, rows, conn.TypeMap(), queryArrayMode, rawText, c.maxHTTPRowBytes, c.maxHTTPResponseBytes); err != nil {
+			if err := streamSingle(w, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, c.MaxHTTPResponseBytes); err != nil {
 				slog.Warn("HTTP result stream interrupted", "kind", interruptedResultKind(err))
 			}
 			return
 		}
-		conn.PgConn().Frontend().SetMaxBodyLen(int(min(c.maxHTTPBufferedBytes, bufferedRemaining)) + pgRowMessageOverhead)
+		conn.PgConn().Frontend().SetMaxBodyLen(int(min(c.MaxHTTPBufferedBytes, bufferedRemaining)) + pgRowMessageOverhead)
 		item, err := collect(ctx, rows, conn.TypeMap(), queryArrayMode, rawText, &bufferedRemaining)
 		if err != nil {
 			if errors.Is(err, errHTTPResultTooLarge) {
@@ -285,9 +286,9 @@ func (c config) sql(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if batch {
-		writeLimitedJSON(w, 200, map[string]any{"results": results}, c.maxHTTPResponseBytes)
+		writeLimitedJSON(w, 200, map[string]any{"results": results}, c.MaxHTTPResponseBytes)
 	} else {
-		writeLimitedJSON(w, 200, results[0], c.maxHTTPResponseBytes)
+		writeLimitedJSON(w, 200, results[0], c.MaxHTTPResponseBytes)
 	}
 }
 
@@ -442,7 +443,7 @@ func dbError(w http.ResponseWriter, err error) {
 	var connectErr *pgconn.ConnectError
 	if errors.As(err, &connectErr) && strings.Contains(connectErr.Error(), "OAuth authentication failed:") {
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-		apiError(w, http.StatusUnauthorized, errInvalidToken)
+		apiError(w, http.StatusUnauthorized, gateway.ErrInvalidToken)
 		return
 	}
 	var pgerr *pgconn.PgError
@@ -479,44 +480,15 @@ func nullableString(value string) any {
 	return value
 }
 
-func (c config) allowOrigin(w http.ResponseWriter, r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
+func interruptedResultKind(err error) string {
+	switch {
+	case errors.Is(err, errHTTPResultTooLarge):
+		return "result_limit"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "query_or_transport"
 	}
-	w.Header().Add("Vary", "Origin")
-	if c.originAllowed(r) {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		return true
-	}
-	http.Error(w, "origin denied", http.StatusForbidden)
-	return false
-}
-func (c config) preflight(w http.ResponseWriter, r *http.Request) {
-	if !c.allowOrigin(w, r) {
-		return
-	}
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Neon-Connection-String, Neon-Array-Mode, Neon-Raw-Text-Output, Neon-Batch-Read-Only, Neon-Batch-Isolation-Level, Neon-Batch-Deferrable")
-	w.Header().Set("Access-Control-Max-Age", "600")
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (c config) originAllowed(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	if c.allowedOrigin != "" && origin == c.allowedOrigin {
-		return true
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host != r.Host {
-		return false
-	}
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	return parsed.Scheme == scheme
 }

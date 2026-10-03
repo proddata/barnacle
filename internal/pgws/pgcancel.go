@@ -1,4 +1,4 @@
-package main
+package pgws
 
 import (
 	"encoding/binary"
@@ -65,11 +65,11 @@ func (p *backendKeyCapture) key() (uint32, []byte) {
 	return p.pid, append([]byte(nil), p.secret...)
 }
 
-func (c config) cancelPostgres(addr string, pid uint32, secret []byte) {
+func (c Handler) cancelPostgres(addr string, pid uint32, secret []byte) {
 	if len(secret) == 0 {
 		return
 	}
-	backend, err := c.dialPostgres(addr)
+	backend, err := c.DialPostgres(addr)
 	if err != nil {
 		return
 	}
@@ -83,21 +83,21 @@ func (c config) cancelPostgres(addr string, pid uint32, secret []byte) {
 	_ = writeFull(backend, packet)
 }
 
-func (c config) cancelDisconnectedSession(addr string, key *backendKeyCapture) {
+func (c Handler) cancelDisconnectedSession(addr string, key *backendKeyCapture) {
 	pid, secret := key.key()
 	if len(secret) == 0 {
 		return
 	}
-	if c.cancelSlots != nil {
+	if c.CancelSlots != nil {
 		select {
-		case c.cancelSlots <- struct{}{}:
+		case c.CancelSlots <- struct{}{}:
 		default:
 			return
 		}
 	}
 	go func() {
-		if c.cancelSlots != nil {
-			defer func() { <-c.cancelSlots }()
+		if c.CancelSlots != nil {
+			defer func() { <-c.CancelSlots }()
 		}
 		c.cancelPostgres(addr, pid, secret)
 	}()

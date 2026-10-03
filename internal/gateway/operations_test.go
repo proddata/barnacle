@@ -1,4 +1,4 @@
-package main
+package gateway
 
 import (
 	"net"
@@ -21,41 +21,41 @@ func TestReadinessChecksConfiguredPostgresTransport(t *testing.T) {
 		}
 		close(accepted)
 	}()
-	cfg := config{
-		readyPGAddr: listener.Addr().String(),
-		pgSSLMode:   "disable",
-		readySlots:  make(chan struct{}, 1),
+	cfg := Config{
+		ReadyPGAddr: listener.Addr().String(),
+		PGSSLMode:   "disable",
+		ReadySlots:  make(chan struct{}, 1),
 	}
 	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	response := httptest.NewRecorder()
-	cfg.ready(response, request)
+	cfg.Ready(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("reachable PostgreSQL status = %d", response.Code)
 	}
 	<-accepted
 	listener.Close()
 	response = httptest.NewRecorder()
-	cfg.ready(response, request)
+	cfg.Ready(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unreachable PostgreSQL status = %d", response.Code)
 	}
-	cfg.readySlots <- struct{}{}
+	cfg.ReadySlots <- struct{}{}
 	response = httptest.NewRecorder()
-	cfg.ready(response, request)
+	cfg.Ready(response, request)
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "probe in progress") {
 		t.Fatalf("concurrent readiness probe = %d, %q", response.Code, response.Body.String())
 	}
-	<-cfg.readySlots
+	<-cfg.ReadySlots
 	response = httptest.NewRecorder()
-	(config{}).ready(response, request)
+	(Config{}).Ready(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("readiness without database probe = %d", response.Code)
 	}
 }
 
 func TestMetricsCountHTTPStatusAndWebSockets(t *testing.T) {
-	m := &metrics{}
-	handler := m.measureSQL(func(w http.ResponseWriter, r *http.Request) {
+	m := &Metrics{}
+	handler := m.MeasureSQL(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Has("fail") {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
@@ -67,7 +67,7 @@ func TestMetricsCountHTTPStatusAndWebSockets(t *testing.T) {
 	}
 	m.websocketActive.Add(2)
 	response := httptest.NewRecorder()
-	m.serve(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	m.Serve(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	for _, line := range []string{
 		"hermit_websocket_active 2", "hermit_sql_requests_total 2",
 		"hermit_sql_errors_total 1", "hermit_sql_duration_seconds_bucket{le=\"+Inf\"} 2",
