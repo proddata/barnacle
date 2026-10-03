@@ -20,6 +20,7 @@ type config struct {
 	pgRootCAs                                                                *x509.CertPool
 	consoleEnabled                                                           bool
 	queryTimeout                                                             time.Duration
+	wsIdleTimeout, wsWriteTimeout                                            time.Duration
 	upstreamSlots                                                            chan struct{}
 	cancelSlots                                                              chan struct{}
 	httpSlots                                                                chan struct{}
@@ -38,6 +39,16 @@ func main() {
 	timeout, err := time.ParseDuration(env("HERMIT_QUERY_TIMEOUT", "30s"))
 	if err != nil || timeout <= 0 {
 		slog.Error("invalid HERMIT_QUERY_TIMEOUT")
+		os.Exit(1)
+	}
+	wsIdleTimeout, err := time.ParseDuration(env("HERMIT_WS_IDLE_TIMEOUT", "30m"))
+	if err != nil || wsIdleTimeout <= 0 {
+		slog.Error("invalid HERMIT_WS_IDLE_TIMEOUT")
+		os.Exit(1)
+	}
+	wsWriteTimeout, err := time.ParseDuration(env("HERMIT_WS_WRITE_TIMEOUT", "30s"))
+	if err != nil || wsWriteTimeout <= 0 {
+		slog.Error("invalid HERMIT_WS_WRITE_TIMEOUT")
 		os.Exit(1)
 	}
 	maxConnections, err := strconv.Atoi(env("HERMIT_MAX_CONNECTIONS", "32"))
@@ -103,6 +114,8 @@ func main() {
 		allowedOrigin:        os.Getenv("HERMIT_ALLOWED_ORIGIN"),
 		consoleEnabled:       strings.EqualFold(os.Getenv("HERMIT_CONSOLE"), "true"),
 		queryTimeout:         timeout,
+		wsIdleTimeout:        wsIdleTimeout,
+		wsWriteTimeout:       wsWriteTimeout,
 		upstreamSlots:        make(chan struct{}, maxConnections),
 		cancelSlots:          make(chan struct{}, min(8, maxConnections)),
 		httpSlots:            make(chan struct{}, maxHTTPQueries),

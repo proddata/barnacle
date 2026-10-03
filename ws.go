@@ -11,18 +11,26 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 )
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 type wsWriter struct {
-	conn net.Conn
-	mu   sync.Mutex
+	conn         net.Conn
+	mu           sync.Mutex
+	writeTimeout time.Duration
 }
 
 func (w *wsWriter) frame(op byte, data []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.writeTimeout > 0 {
+		if err := w.conn.SetWriteDeadline(time.Now().Add(w.writeTimeout)); err != nil {
+			return err
+		}
+	}
 	head := []byte{0x80 | op, 0}
 	switch {
 	case len(data) < 126:
@@ -93,6 +101,11 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer client.Close()
+	if c.wsWriteTimeout > 0 {
+		if err := client.SetWriteDeadline(time.Now().Add(c.wsWriteTimeout)); err != nil {
+			return
+		}
+	}
 	accept := sha1.Sum([]byte(key + wsGUID))
 	_, err = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(accept[:]) + "\r\n\r\n")
 	if err != nil {
@@ -101,11 +114,10 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 	if err = rw.Flush(); err != nil {
 		return
 	}
-	writer := &wsWriter{conn: client}
+	writer := &wsWriter{conn: client, writeTimeout: c.wsWriteTimeout}
 	keyData := &backendKeyCapture{}
 	type relayEnd struct {
-		fromClient bool
-		err        error
+		cancel bool
 	}
 	done := make(chan relayEnd, 2)
 	go func() {
@@ -114,8 +126,13 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, e := backend.Read(buf)
 			if n > 0 {
+				if c.wsIdleTimeout > 0 {
+					_ = client.SetReadDeadline(time.Now().Add(c.wsIdleTimeout))
+				}
 				keyData.feed(buf[:n])
 				if writer.frame(2, buf[:n]) != nil {
+					// A slow or vanished client must not keep PostgreSQL busy.
+					c.cancelDisconnectedSession(upstream, keyData)
 					return
 				}
 			}
@@ -124,9 +141,12 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
-	go func() { done <- relayEnd{fromClient: true, err: readWS(rw.Reader, backend, writer)} }()
+	go func() {
+		err := readWS(rw.Reader, &deadlineWriter{conn: backend, timeout: c.wsWriteTimeout}, writer, client, c.wsIdleTimeout)
+		done <- relayEnd{cancel: err != nil}
+	}()
 	ended := <-done
-	if ended.fromClient && ended.err != nil {
+	if ended.cancel {
 		c.cancelDisconnectedSession(upstream, keyData)
 	}
 	_ = client.Close()
@@ -135,10 +155,15 @@ func (c config) websocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // readWS streams masked client data into PostgreSQL without buffering whole messages.
-func readWS(reader *bufio.Reader, backend io.Writer, writer *wsWriter) error {
+func readWS(reader *bufio.Reader, backend io.Writer, writer *wsWriter, client net.Conn, idleTimeout time.Duration) error {
 	var fragmented bool
 	var buffer [32 << 10]byte
 	for {
+		if client != nil && idleTimeout > 0 {
+			if err := client.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+				return err
+			}
+		}
 		b1, err := reader.ReadByte()
 		if err != nil {
 			return err
@@ -188,8 +213,10 @@ func readWS(reader *bufio.Reader, backend io.Writer, writer *wsWriter) error {
 			}
 			switch op {
 			case 8:
-				_ = writer.frame(8, payload)
-				return nil
+				if len(payload) == 1 || len(payload) >= 2 && (!validCloseCode(binary.BigEndian.Uint16(payload[:2])) || !utf8.Valid(payload[2:])) {
+					return errors.New("invalid close frame")
+				}
+				return writer.frame(8, payload)
 			case 9:
 				if err = writer.frame(10, payload); err != nil {
 					return err
@@ -229,6 +256,24 @@ func readWS(reader *bufio.Reader, backend io.Writer, writer *wsWriter) error {
 		}
 		fragmented = !fin
 	}
+}
+
+func validCloseCode(code uint16) bool {
+	return code >= 1000 && code <= 4999 && code != 1004 && code != 1005 && code != 1006 && code != 1015
+}
+
+type deadlineWriter struct {
+	conn    net.Conn
+	timeout time.Duration
+}
+
+func (w *deadlineWriter) Write(p []byte) (int, error) {
+	if w.timeout > 0 {
+		if err := w.conn.SetWriteDeadline(time.Now().Add(w.timeout)); err != nil {
+			return 0, err
+		}
+	}
+	return w.conn.Write(p)
 }
 
 func writeFull(w io.Writer, p []byte) error {

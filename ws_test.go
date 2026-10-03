@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 )
 
 func clientFrame(op byte, fin bool, payload []byte) []byte {
@@ -28,7 +29,7 @@ func TestReadWSStreamsFragmentedBinaryAndPong(t *testing.T) {
 	writer := &wsWriter{conn: left}
 	frames := bytes.Join([][]byte{clientFrame(2, false, []byte("abc")), clientFrame(9, true, []byte("x")), clientFrame(0, true, []byte("def")), clientFrame(8, true, nil)}, nil)
 	done := make(chan error, 1)
-	go func() { done <- readWS(bufio.NewReader(bytes.NewReader(frames)), &output, writer) }()
+	go func() { done <- readWS(bufio.NewReader(bytes.NewReader(frames)), &output, writer, nil, 0) }()
 	pong := make([]byte, 3)
 	if _, err := io.ReadFull(right, pong); err != nil {
 		t.Fatal(err)
@@ -52,8 +53,85 @@ func TestReadWSStreamsFragmentedBinaryAndPong(t *testing.T) {
 }
 func TestReadWSRejectsUnmaskedFrame(t *testing.T) {
 	frame := []byte{0x82, 1, 'x'}
-	if err := readWS(bufio.NewReader(bytes.NewReader(frame)), io.Discard, &wsWriter{}); err == nil {
+	if err := readWS(bufio.NewReader(bytes.NewReader(frame)), io.Discard, &wsWriter{}, nil, 0); err == nil {
 		t.Fatal("unmasked frame accepted")
+	}
+}
+
+func TestReadWSStreamsLargeFrame(t *testing.T) {
+	payload := bytes.Repeat([]byte{'q'}, 1<<20)
+	frame := make([]byte, 0, len(payload)+14)
+	frame = append(frame, 0x82, 0xff)
+	frame = binary.BigEndian.AppendUint64(frame, uint64(len(payload)))
+	frame = append(frame, 1, 2, 3, 4)
+	for i, b := range payload {
+		frame = append(frame, b^byte(i%4+1))
+	}
+	frame = append(frame, clientFrame(8, true, nil)...)
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- readWS(bufio.NewReader(bytes.NewReader(frame)), &output, &wsWriter{conn: left}, nil, 0)
+	}()
+	var closeFrame [2]byte
+	if _, err := io.ReadFull(right, closeFrame[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(output.Bytes(), payload) {
+		t.Fatal("large frame was not forwarded intact")
+	}
+}
+
+func TestReadWSIdleTimeout(t *testing.T) {
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	started := time.Now()
+	err := readWS(bufio.NewReader(client), io.Discard, &wsWriter{}, client, 50*time.Millisecond)
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("idle read error = %v, want timeout", err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("idle session did not time out promptly")
+	}
+}
+
+func TestWebSocketAndBackendWritesTimeOut(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		write func(net.Conn) error
+	}{
+		{"websocket", func(conn net.Conn) error {
+			return (&wsWriter{conn: conn, writeTimeout: 50 * time.Millisecond}).frame(2, []byte("blocked"))
+		}},
+		{"postgres", func(conn net.Conn) error {
+			return writeFull(&deadlineWriter{conn: conn, timeout: 50 * time.Millisecond}, []byte("blocked"))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn, peer := net.Pipe()
+			defer conn.Close()
+			defer peer.Close()
+			err := test.write(conn)
+			if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+				t.Fatalf("stalled write error = %v, want timeout", err)
+			}
+		})
+	}
+}
+
+func TestReadWSRejectsInvalidClose(t *testing.T) {
+	for _, payload := range [][]byte{{1}, {0x03, 0xed}, {0x03, 0xe8, 0xff}} {
+		frame := clientFrame(8, true, payload)
+		if err := readWS(bufio.NewReader(bytes.NewReader(frame)), io.Discard, &wsWriter{}, nil, 0); err == nil {
+			t.Fatalf("invalid close payload %v accepted", payload)
+		}
 	}
 }
 func TestWSHeaderLength(t *testing.T) {
