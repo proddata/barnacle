@@ -1,6 +1,6 @@
-# Hermit compatibility TODO
+# Hermit compatibility and production TODO
 
-This is a gap check for Hermit as a PostgreSQL proxy with fixed routing by default and an optional exact-address allowlist, compared with `@neondatabase/serverless` 1.2.0 and Neon's SQL-over-HTTP/WebSocket implementation. Checked 2026-10-03. Items below describe missing behavior; a passing smoke test does not imply full protocol parity.
+This tracks Hermit's API compatibility and production release gates. Compatibility was checked against `@neondatabase/serverless` 1.2.0 and Neon's SQL-over-HTTP/WebSocket implementation on 2026-10-03. A passing smoke test does not imply full protocol parity or production readiness.
 
 ## Working baseline
 
@@ -36,6 +36,17 @@ This is a gap check for Hermit as a PostgreSQL proxy with fixed routing by defau
 - [x] **Add readiness and basic metrics.** `/readyz` can optionally check PostgreSQL TCP and TLS via `HERMIT_READY_PG_ADDR`, without database credentials. Opt-in `/metrics` reports active WebSockets, SQL request/error counts, and a request duration histogram. Stream interruption logs use fixed error kinds rather than raw errors; metrics contain no query text or credentials.
 - [x] **Run end-to-end deployment checks.** HAProxy `https`/`wss`, Compose, a Fedora RPM build, SIGTERM drain with active HTTP/WebSocket queries, and browser CORS/WebSocket-origin checks have run locally. The [GitHub CI run for `bd7ef2e`](https://github.com/proddata/hermit/actions/runs/37106478826) passed the Fedora integration and RPM jobs. CI will exercise the newer local shutdown and browser changes after they are pushed.
 - [x] **Decide whether HTTP connection reuse is needed.** Keep one upstream connection per HTTP request. In the [local connection-cost measurement](benchmarks.md#http-connection-reuse-decision), Hermit completed about 500 small HTTP queries per second at 6.7 ms p95 with eight in-flight slots. PgBouncer may pool PostgreSQL backends in deployment, reducing the reason for a Hermit-side pool. It would not eliminate Hermit-to-PgBouncer connection setup latency. Reconsider only after measuring the intended Fedora/PgBouncer setup; validate the OAuth path separately if PgBouncer is added.
+
+## Production readiness — open gates
+
+These checks apply to the actual release topology; they are separate from Neon API compatibility. Complete the relevant items before exposing Hermit to production traffic.
+
+- [ ] **Bound slow HTTP request bodies and idle connections.** `main.go` sets `ReadHeaderTimeout`, but no body-read or idle timeout. `POST /sql` decodes its body before `HERMIT_QUERY_TIMEOUT` starts. Add a finite deadline without shortening legitimate WebSocket sessions, and test slow-drip bodies and many idle keep-alive clients. The 1 MiB body size limit alone does not bound how long a client can send it.
+- [ ] **Run the exact release commit through CI and an installed Fedora service.** The latest [successful remote CI run](https://github.com/proddata/hermit/actions/runs/37106478826) predates the current local commits. Run all Ubuntu, Fedora, RPM, TLS, browser, and OAuth jobs on the release commit. Install its RPM on a disposable Fedora host and exercise systemd restart, memory limits, SIGTERM drain, and certificate/configuration rotation with a restart.
+- [ ] **Lock down the production auth and network configuration.** Decide whether clients use SCRAM passwords or the OIDC/OAUTHBEARER path; for OAuth, configure the PostgreSQL validator, issuer, audience, scopes, and role mapping. Keep Hermit private behind the TLS ingress, disable the manual console, use a trusted upstream CA, restrict `/metrics`, and ensure proxy/access logs never record `Authorization`, `Neon-Connection-String`, or WebSocket auth cookies. Set PostgreSQL role privileges and `statement_timeout` for the intended workload.
+- [ ] **Validate PgBouncer in the chosen topology if it is deployed.** Run the published Neon driver through Hermit and the selected PgBouncer pool mode for HTTP batches, WebSocket sessions, prepared statements, cancellation, TLS, and failures. PgBouncer authenticates clients itself; the tested PostgreSQL 18 OAuth path currently bypasses PgBouncer and must be proven separately before routing tokens through it.
+- [ ] **Qualify the service on the target host and set alerts.** Run a representative load and soak test with realistic result sizes, concurrent WebSockets, slow clients, database restarts, and OIDC/JWKS outages. Record p95/p99 latency, PostgreSQL connections, Hermit RSS/cgroup peak, CPU, 503s, and recovery time. Tune the systemd memory limits and alert on errors, saturation, restarts, and readiness failures using the observed baseline.
+- [ ] **Check release dependencies and rollback.** Scan the pinned Go and npm dependencies plus container/RPM inputs for known vulnerabilities, document the supported version set, and rehearse rolling back the RPM and ingress configuration.
 
 ## Deliberately outside the current target
 
