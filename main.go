@@ -30,6 +30,16 @@ func main() {
 		slog.Error("invalid HERMIT_QUERY_TIMEOUT")
 		os.Exit(1)
 	}
+	httpReadTimeout, err := time.ParseDuration(env("HERMIT_HTTP_READ_TIMEOUT", "15s"))
+	if err != nil || httpReadTimeout <= 0 {
+		slog.Error("invalid HERMIT_HTTP_READ_TIMEOUT")
+		os.Exit(1)
+	}
+	httpIdleTimeout, err := time.ParseDuration(env("HERMIT_HTTP_IDLE_TIMEOUT", "60s"))
+	if err != nil || httpIdleTimeout <= 0 {
+		slog.Error("invalid HERMIT_HTTP_IDLE_TIMEOUT")
+		os.Exit(1)
+	}
 	wsIdleTimeout, err := time.ParseDuration(env("HERMIT_WS_IDLE_TIMEOUT", "30m"))
 	if err != nil || wsIdleTimeout <= 0 {
 		slog.Error("invalid HERMIT_WS_IDLE_TIMEOUT")
@@ -151,7 +161,13 @@ func main() {
 		mux.HandleFunc("GET /console.mjs", consoleScript)
 		mux.HandleFunc("GET /pgwire.mjs", consoleScript)
 	}
-	server := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10}
+	server := &http.Server{
+		Addr: cfg.Listen, Handler: mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       httpReadTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    32 << 10,
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	shutdownDone := make(chan struct{})

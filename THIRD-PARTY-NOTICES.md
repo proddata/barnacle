@@ -14,11 +14,11 @@ image and RPM.
 
 | Component | Version | License | License text |
 | --- | --- | --- | --- |
-| Go standard library | Go 1.25.0 | BSD-3-Clause | `GO-STANDARD-LIBRARY` |
+| Go standard library | Go 1.25.14 | BSD-3-Clause | `GO-STANDARD-LIBRARY` |
 | `github.com/jackc/pgx/v5` | 5.11.0 | MIT | `PGX` |
 | `github.com/jackc/pgpassfile` | 1.0.0 | MIT | `PGPASSFILE` |
 | `github.com/jackc/pgservicefile` | 2024-06-06 commit `5a60cdf6a761` | MIT | `PGSERVICEFILE` |
-| `golang.org/x/text` | 0.29.0 | BSD-3-Clause | `X-TEXT` |
+| `golang.org/x/text` | 0.39.0 | BSD-3-Clause | `X-TEXT` |
 
 `pgx`'s module graph also names `puddle/v2`, `golang.org/x/sync`, and test
 helpers. They are not in the compiled Hermit executable according to
@@ -47,7 +47,7 @@ product artifact.
 ## Container images and external services
 
 The runtime image starts from `alpine:3.21`; the build stage uses
-`golang:1.25-alpine`. Development and integration tests also use PostgreSQL,
+`golang:1.25.14-alpine`. Development and integration tests also use PostgreSQL,
 HAProxy, Node, and Fedora images. Those are separately distributed software,
 not relicensed by Hermit's Apache-2.0 license. PostgreSQL itself uses the
 [PostgreSQL License](https://www.postgresql.org/about/licence/).

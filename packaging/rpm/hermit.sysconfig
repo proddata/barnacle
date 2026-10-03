@@ -6,6 +6,8 @@ HERMIT_PG_SSLMODE=require
 HERMIT_PG_USER=postgres
 HERMIT_PG_DATABASE=postgres
 HERMIT_MAX_CONNECTIONS=32
+# HERMIT_HTTP_READ_TIMEOUT=15s
+# HERMIT_HTTP_IDLE_TIMEOUT=60s
 HERMIT_CONSOLE=false
 # Set both values to require RFC 9068 access tokens before HTTP or WebSocket reaches PostgreSQL.
 # HERMIT_OIDC_ISSUER=https://issuer.example.com/

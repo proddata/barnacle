@@ -112,7 +112,7 @@ The HTTP response has `rows`, `fields`, `command`, `rowCount`, and `rowAsArray`;
 
 `POST /sql` compresses JSON responses of 1 KiB or more when the client sends `Accept-Encoding: gzip`. Small responses stay plain. The Neon driver uses `fetch()`, so browser and Node HTTP stacks handle response decompression; the driver itself does not set a gzip option. Request bodies remain plain JSON.
 
-Hermit accepts up to 1 MiB per HTTP request and up to 100 queries per batch. HTTP queries have a 30 second default timeout. Single-query HTTP responses stream JSON rows; batches and plain JSON responses involving custom PostgreSQL types use a 4 MiB buffered-result budget that counts field bytes and row overhead. By default, one HTTP row may contain up to 8 MiB of PostgreSQL field data and one response up to 128 MiB of uncompressed JSON. pgx's wire reader rejects oversized PostgreSQL messages before allocating their bodies. A result over a limit returns HTTP 413 if detected before headers are sent; once streaming has begun, the JSON response is interrupted. Use the WebSocket path for sessions and very large individual rows. The WebSocket relay does not parse SQL. Its upstream address is fixed by default; optional routing can use the driver's `?address=host:port` parameter.
+Hermit accepts up to 1 MiB per HTTP request and up to 100 queries per batch. An HTTP request must arrive within 15 seconds by default, including its body; an idle HTTP keep-alive connection closes after 60 seconds. The separate HTTP connection and query timeout defaults to 30 seconds. Single-query HTTP responses stream JSON rows; batches and plain JSON responses involving custom PostgreSQL types use a 4 MiB buffered-result budget that counts field bytes and row overhead. By default, one HTTP row may contain up to 8 MiB of PostgreSQL field data and one response up to 128 MiB of uncompressed JSON. pgx's wire reader rejects oversized PostgreSQL messages before allocating their bodies. A result over a limit returns HTTP 413 if detected before headers are sent; once streaming has begun, the JSON response is interrupted. Use the WebSocket path for sessions and very large individual rows. The WebSocket relay does not parse SQL. Its upstream address is fixed by default; optional routing can use the driver's `?address=host:port` parameter.
 
 Streaming lets Hermit avoid holding a whole result, while the Neon driver's `neon()` API still parses the complete JSON response before returning rows. If PostgreSQL fails after some rows have been sent, Hermit cannot change the HTTP status; the client sees an incomplete JSON response. Errors detected before the first row retain a structured PostgreSQL error response.
 
@@ -153,6 +153,8 @@ Allow only database addresses you control. Hermit resolves the listed hostnames 
 | `HERMIT_PG_SSLMODE` | `require` | Upstream TLS for HTTP and WebSocket: `require` verifies the server certificate and hostname; `disable` permits plaintext on a trusted local network |
 | `HERMIT_PG_CA_FILE` | empty | Optional PEM CA bundle for the upstream PostgreSQL certificate; empty uses the system trust store |
 | `HERMIT_QUERY_TIMEOUT` | `30s` | HTTP connection and query deadline |
+| `HERMIT_HTTP_READ_TIMEOUT` | `15s` | Maximum time to read an HTTP request, including its body; the WebSocket handshake is subject to this until upgrade |
+| `HERMIT_HTTP_IDLE_TIMEOUT` | `60s` | Maximum idle time between HTTP keep-alive requests; upgraded WebSockets use `HERMIT_WS_IDLE_TIMEOUT` instead |
 | `HERMIT_READY_PG_ADDR` | empty | Optional `host:port` probe for `/readyz`; checks TCP and configured PostgreSQL TLS, without authentication |
 | `HERMIT_METRICS` | `false` | Expose `GET /metrics` on the main listener; keep it private |
 | `HERMIT_WS_IDLE_TIMEOUT` | `30m` | Close a WebSocket session after this long without client frames or PostgreSQL output |
@@ -175,7 +177,7 @@ Same-origin browser requests work without extra configuration. Set `HERMIT_ALLOW
 
 ### Fedora
 
-Build a local RPM on Fedora with Go 1.25 or newer:
+Build a local RPM on Fedora with Go 1.25.14 or newer:
 
 ```sh
 sudo dnf install golang rpm-build systemd-rpm-macros
@@ -236,7 +238,7 @@ TEST_DATABASE_URL='postgres://hermit:hermit_dev_password@localhost:5432/hermit' 
 ./integration/run.sh
 ```
 
-The integration suite installs `@neondatabase/serverless` and `ws` from npm using the committed lockfile. [CI](.github/workflows/ci.yml) runs Go tests with the race detector on Ubuntu, checks browser CORS and WebSocket origins in headless Chrome, and builds the Fedora RPM in an independent job. The direct integration runner also sends SIGTERM to a second Hermit process with HTTP and WebSocket queries active; it checks the HTTP response, WebSocket close code, PostgreSQL cleanup, and process exit. Run the browser check locally with `HERMIT_BROWSER_CORS=1 ./integration/run.sh` when Chrome or Chromium is installed. The WebSocket frame and PostgreSQL key parsers have Go fuzz targets in `internal/pgws/`.
+The integration suite installs `@neondatabase/serverless` and `ws` from npm using the committed lockfile. [CI](.github/workflows/ci.yml) runs Go tests with the race detector and Go/npm vulnerability scans on Ubuntu, checks browser CORS and WebSocket origins in headless Chrome, and builds the Fedora RPM in an independent job. The direct integration runner also sends SIGTERM to a second Hermit process with HTTP and WebSocket queries active; it checks the HTTP response, WebSocket close code, PostgreSQL cleanup, and process exit. A separate process-level check sends an incomplete slow HTTP body, holds idle keep-alive connections, and verifies that an upgraded WebSocket stays usable. Run the browser check locally with `HERMIT_BROWSER_CORS=1 ./integration/run.sh` when Chrome or Chromium is installed. The WebSocket frame and PostgreSQL key parsers have Go fuzz targets in `internal/pgws/`.
 
 To verify Compose's upstream TLS directly, run `node integration/pg-tls.mjs` while the stack is up. It asks PostgreSQL's `pg_stat_ssl` view whether the current HTTP and WebSocket sessions use TLS. The Go suite also checks that WebSocket connections reject plaintext servers and certificates with the wrong hostname.
 

@@ -33,6 +33,7 @@ if [ "${HERMIT_ROUTING_ONLY:-}" = 1 ]; then
 else
   npm test --prefix integration
   HERMIT_SHUTDOWN_BINARY="$binary" node integration/shutdown.mjs
+  HERMIT_TIMEOUT_BINARY="$binary" node integration/http-timeouts.mjs
   if [ "${HERMIT_BROWSER_CORS:-}" = 1 ]; then
     HERMIT_BROWSER_BINARY="$binary" node integration/browser-cors.mjs
   fi
