@@ -42,3 +42,21 @@ node integration/large-result.mjs --transport=http --rows=100 --row-mib=1
 ```
 
 Both commands complete under the 256 MiB limit. To repeat the historical one-row HTTP measurement, run `HERMIT_HTTP_MAX_ROW_MIB=128 docker compose up -d --force-recreate hermit` before the test; the default returns 413. Recreate again without that variable to restore the default. A client or PostgreSQL error after HTTP headers have begun produces an interrupted JSON stream; the HTTP status cannot then be changed to a PostgreSQL error response.
+
+## HTTP connection reuse decision
+
+On 2026-10-03, a local Docker Desktop run used the Compose PostgreSQL 17 and Hermit services, TLS between Hermit and PostgreSQL, `select 1`, the published Neon driver, and a 256 MiB Hermit limit. Each endpoint profile lasted ten seconds. `connections` capped HTTP requests in flight or kept that many WebSocket sessions open. PostgreSQL's `sessions` counter rose by approximately one per completed HTTP request; the Compose health check and statistics observer also create sessions. Hermit was not restarted between these profiles, so the sampled memory peaks reflect a warmed process rather than isolated per-profile increments.
+
+| Transport | Offered QPS | Completed / skipped | p50 / p95 / p99 | Hermit sampled peak |
+| --- | ---: | ---: | ---: | ---: |
+| HTTP, 1 in flight | 100 | 882 / 118 | 3.6 / 4.0 / 5.0 ms | 13.2 MiB |
+| HTTP, 8 in flight | 200 | 1,999 / 1 | 4.3 / 5.1 / 5.9 ms | 16.3 MiB |
+| WebSocket, 8 open | 200 | 2,000 / 0 | 2.0 / 3.2 / 3.3 ms | 15.9 MiB |
+| HTTP, 8 in flight | 500 | 4,981 / 19 | 5.6 / 6.7 / 7.7 ms | 17.1 MiB |
+| WebSocket, 8 open | 500 | 5,000 / 0 | 2.1 / 3.5 / 4.2 ms | 17.4 MiB |
+
+The [direct pgx probe](integration/connection-cost.go) isolates PostgreSQL connection setup from HTTP and WebSocket processing. It used TLS from the macOS host to PostgreSQL's localhost port in the same Compose stack. With one worker and 500 queries, a fresh connection per query had p50/p95 4.45/4.79 ms and 221 QPS; one reused connection had 0.19/0.25 ms and 4,635 QPS. With eight workers and 1,000 queries, fresh connections had p50/p95 7.79/10.47 ms and 990 QPS; reused connections had 0.43/0.61 ms and 15,188 QPS. PostgreSQL recorded about 500 or 1,000 new sessions in the fresh cases and only one or eight in the reused cases. The direct probe is **not** an HTTP pooling implementation, so its QPS and latency should not be substituted for Hermit's HTTP results.
+
+**Decision:** keep the current per-request HTTP connection behavior for now. It sustained roughly 500 small queries per second in this local setup with a 6.7 ms p95 and low Hermit memory. Reuse could save several milliseconds and reduce PostgreSQL session churn for latency-sensitive HTTP workloads, but a pool must be bounded and partitioned by upstream address, database, role, and effective password or token. PostgreSQL session state must be reset before reuse, and OAuth token expiry or revocation needs a defined policy. Benchmark a representative workload on the target Fedora host before adding that complexity. WebSocket already offers persistent PostgreSQL sessions when the application needs them.
+
+To repeat the direct probe, expose the disposable Compose PostgreSQL port on localhost with a temporary override, then set `TEST_DATABASE_URL` to that port with `sslmode=require` and run `go run integration/connection-cost.go -mode=fresh -workers=1 -queries=500` and the corresponding `-mode=reuse` command. The endpoint profiles use `node integration/bench.mjs --transport=http --connections=8 --qps=500 --seconds=10` or `--transport=ws`. These numbers are host-specific; Docker Desktop networking and TLS affect them.
