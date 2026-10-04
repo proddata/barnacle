@@ -10,7 +10,6 @@ type Config struct {
 	PGDatabase, PGUser, PGPassword, PGSSLMode                   string
 	PGAllowedAddrs                                              map[string]struct{}
 	PGRootCAs                                                   *x509.CertPool
-	ConsoleEnabled                                              bool
 	QueryTimeout, WSIdleTimeout, WSWriteTimeout                 time.Duration
 	UpstreamSlots, CancelSlots, HTTPSlots, ReadySlots           chan struct{}
 	MaxHTTPRowBytes, MaxHTTPBufferedBytes, MaxHTTPResponseBytes int64

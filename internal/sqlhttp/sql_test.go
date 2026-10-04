@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,10 +62,52 @@ func TestConnectionConfigRequiresCredential(t *testing.T) {
 		t.Fatal("accepted passwordless connection string")
 	}
 }
+func TestConnectionConfigRejectsCredentialOverridesAndFileOptions(t *testing.T) {
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable"}}
+	for _, raw := range []string{
+		"postgres://app:secret@remote.example/app?user=other",
+		"postgres://app:secret@remote.example/app?password=other",
+		"postgres://app:secret@remote.example/app?servicefile=/etc/passwd&service=app",
+		"postgres://app:secret@remote.example/app?passfile=/etc/passwd",
+		"postgres://app:secret@remote.example/app?sslcert=/etc/passwd",
+		"postgres://app:secret@remote.example/app?require_auth=none",
+		"postgres://app:secret@remote.example/app?require_auth=md5&require_auth=scram-sha-256",
+		"postgres://:secret@remote.example/app",
+	} {
+		req := httptest.NewRequest("POST", "http://localhost/sql", nil)
+		req.Header.Set("Neon-Connection-String", raw)
+		if _, err := cfg.connectionConfig(req); err == nil || strings.Contains(err.Error(), "secret") {
+			t.Errorf("connectionConfig(%q) error = %v", raw, err)
+		}
+	}
+}
+
+func TestConnectionConfigKeepsRequestCredentialsSeparate(t *testing.T) {
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable"}}
+	for _, tc := range []struct{ user, password string }{{"alice", "first"}, {"bob", "second"}} {
+		req := httptest.NewRequest("POST", "http://localhost/sql", nil)
+		req.Header.Set("Neon-Connection-String", "postgres://"+tc.user+":"+tc.password+"@remote.example/app?sslmode=require")
+		pgcfg, err := cfg.connectionConfig(req)
+		if err != nil || pgcfg.User != tc.user || pgcfg.Password != tc.password {
+			t.Fatalf("credentials for %s = %v, %v", tc.user, pgcfg, err)
+		}
+	}
+}
+func TestConnectionConfigCanRequirePasswordMethod(t *testing.T) {
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable"}}
+	for _, method := range []string{"scram-sha-256", "md5"} {
+		req := httptest.NewRequest("POST", "http://localhost/sql", nil)
+		req.Header.Set("Neon-Connection-String", "postgres://app:secret@remote.example/app?require_auth="+method)
+		pgcfg, err := cfg.connectionConfig(req)
+		if err != nil || pgcfg.RequireAuth != method {
+			t.Fatalf("required method %s = %#v, %v", method, pgcfg, err)
+		}
+	}
+}
 func TestOIDCConnectionRequiresOAuth(t *testing.T) {
 	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable", OIDC: &gateway.OIDCGate{}}}
 	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
-	req.Header.Set("Neon-Connection-String", "postgres://app:legacy-password@remote.example/appdb?require_auth=scram-sha-256")
+	req.Header.Set("Neon-Connection-String", "postgres://app:legacy-password@remote.example/appdb?require_auth=md5")
 	req.Header.Set("Authorization", "Bearer signed-access-token")
 	pgcfg, err := cfg.connectionConfig(req)
 	if err != nil {

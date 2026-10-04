@@ -16,13 +16,23 @@ Hermit is [Apache-2.0 licensed](LICENSE). See [third-party notices](THIRD-PARTY-
 docker compose up --build
 ```
 
-Open [localhost:8080](http://localhost:8080) and use the HTTP or WebSocket buttons with:
+To start the separate debug console as well:
+
+```sh
+docker compose --profile console up --build
+```
+
+Open [localhost:8081](http://localhost:8081) and use host `postgres:5432`, database `hermit`, user `hermit`, and password `hermit_dev_password`. The console has a Monaco SQL editor, a database explorer, result grids, and a request debug panel. It offers HTTP password, HTTP bearer, and WebSocket password queries through the Neon serverless driver. Hermit itself listens at [localhost:8080](http://localhost:8080).
+
+The equivalent PostgreSQL connection string is:
 
 ```text
 postgres://hermit:hermit_dev_password@localhost:5432/hermit
 ```
 
 The Compose stack is for local development: it binds Hermit to loopback, keeps PostgreSQL off the host network, and verifies a generated PostgreSQL certificate. The example password is not for production.
+
+The console's host field can select another PostgreSQL or PgBouncer address only when that address appears in `HERMIT_PG_ALLOWED_ADDRS`. In fixed mode, Hermit always connects to `HERMIT_PG_ADDR` regardless of the host shown in the console. The console container proxies HTTP and WebSocket requests to Hermit on the same browser origin; it is an optional debugging artifact, not part of the Hermit binary.
 
 Try SQL over HTTP:
 

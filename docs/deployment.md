@@ -52,6 +52,8 @@ PgBouncer must accept TLS from Hermit and present a certificate valid for `pgbou
 
 Each HTTP request creates a client connection to PgBouncer. Transaction pooling can reuse backend connections for compatible stateless HTTP queries. WebSocket connections remain open PostgreSQL sessions; choose session pooling if applications use session state, prepared statements, temporary tables, or other features incompatible with transaction pooling. Size `HERMIT_MAX_CONNECTIONS` and `HERMIT_MAX_HTTP_QUERIES` against PgBouncer's client limit and the database's backend budget.
 
+PgBouncer normally keeps server pools separate by database and user. If its database definition sets `user=`, all clients of that database use that one server role instead. Review PgBouncer's authentication and database mapping before relying on PostgreSQL roles for isolation between clients; Hermit does not control PgBouncer's backend reuse.
+
 ## Both direct and pooled routes, including on one host
 
 Use routing only if callers are allowed to choose **either** path. It is a destination allowlist, not a per-user, per-transport, or per-database authorization rule. A caller with valid credentials could choose the direct path and bypass the pool. If direct access is reserved for a different trust group, run separate Hermit instances with fixed upstreams and distinct ingress/auth policies.
@@ -119,9 +121,9 @@ networks:
 
 This fragment illustrates the two-route container configuration and network membership, not a complete runnable stack: add images, volumes, PgBouncer auth/TLS configuration, and a certificate mount. Set `HERMIT_PG_ALLOWED_ADDRS: ''` for a fixed PgBouncer route. An `internal: true` network has no external gateway, but Hermit can still reach other destinations through its `frontend` network. Apply egress rules there, including a narrow route to the OIDC issuer when needed. Do not rely on merely leaving `ports:` off a service as an egress restriction.
 
-On Kubernetes, use separate Services for PostgreSQL and PgBouncer and a NetworkPolicy (with a CNI that enforces it) for Hermit's egress and the database services' ingress. On a VM, use host firewall rules or equivalent cloud security groups. Across all modes, expose Hermit's listener through TLS termination and keep `/metrics` and the development console private.
+On Kubernetes, use separate Services for PostgreSQL and PgBouncer and a NetworkPolicy (with a CNI that enforces it) for Hermit's egress and the database services' ingress. On a VM, use host firewall rules or equivalent cloud security groups. Across all modes, expose Hermit's listener through TLS termination and keep `/metrics` private. The optional console is a separate debug service.
 
-The supplied [HAProxy example](../haproxy.cfg) terminates HTTPS/WSS, has WebSocket-friendly timeouts, and forwards client aborts with `option abortonclose` so Hermit can cancel HTTP work. Set `X-Forwarded-Proto: https` if serving the console through TLS.
+The supplied [HAProxy example](../haproxy.cfg) terminates HTTPS/WSS, has WebSocket-friendly timeouts, and forwards client aborts with `option abortonclose` so Hermit can cancel HTTP work. If you expose the separate console through a TLS ingress, preserve its public Host and scheme through both proxy hops so Hermit's browser Origin check can succeed.
 
 ## Configuration reference
 
@@ -149,13 +151,12 @@ The supplied [HAProxy example](../haproxy.cfg) terminates HTTPS/WSS, has WebSock
 | `HERMIT_OIDC_ISSUER` | empty | Exact issuer URL; set with `HERMIT_OIDC_AUDIENCE` to enable the access-token gate |
 | `HERMIT_OIDC_AUDIENCE` | empty | Required resource audience when the OIDC gate is enabled |
 | `HERMIT_ALLOWED_ORIGIN` | empty | One additional allowed browser origin, e.g. `https://app.example.com` |
-| `HERMIT_CONSOLE` | `false` | Expose the manual console at `/` |
 
 A WebSocket query that produces no output for longer than `HERMIT_WS_IDLE_TIMEOUT` will be disconnected. Raise that setting for longer quiet queries; PostgreSQL's own `statement_timeout` remains the query-duration limit.
 
 `/healthz` checks that Hermit is running. `/readyz` returns 200 when ready; set `HERMIT_READY_PG_ADDR` to enable a PostgreSQL transport probe, which returns 503 if the address cannot be reached or its TLS certificate fails verification. The probe does not log in or run SQL. `/metrics` is disabled by default. When enabled, it serves Prometheus text format with active WebSockets, SQL request and HTTP error counts, a SQL duration histogram, connection-limit rejections, and failed upstream connections. A failed upstream connection includes network, TLS, and PostgreSQL authentication failures. These metrics contain no query text or credentials. Restrict access to `/metrics` at your ingress if the main listener is exposed. An OpenTelemetry Collector can scrape this endpoint with its Prometheus receiver; Hermit does not currently emit OTLP or traces itself.
 
-Same-origin browser requests work without extra configuration. Set `HERMIT_ALLOWED_ORIGIN` to the exact origin of a separate frontend. Do not expose the development console publicly. Compose's generated CA is only for local testing; deploy with a CA you trust for your PostgreSQL server. For both transports, a failed TLS handshake or certificate check prevents the database session.
+Same-origin browser requests work without extra configuration. Set `HERMIT_ALLOWED_ORIGIN` to the exact origin of a separate frontend. The optional console is a separate Compose service bound to loopback. Compose's generated CA is only for local testing; deploy with a CA you trust for your PostgreSQL server. For both transports, a failed TLS handshake or certificate check prevents the database session.
 
 ## Ubuntu and Debian service
 

@@ -26,7 +26,7 @@ services:
     environment:
       HERMIT_LISTEN: ':8080'
       HERMIT_PG_ADDR: '${HERMIT_PG_ADDR-postgres:5432}'
-      HERMIT_PG_ALLOWED_ADDRS: '${HERMIT_PG_ALLOWED_ADDRS:-}'
+      #HERMIT_PG_ALLOWED_ADDRS: '${HERMIT_PG_ALLOWED_ADDRS:-}'
       HERMIT_PG_SSLMODE: require
       HERMIT_PG_CA_FILE: /pgcerts/ca.crt
       HERMIT_PG_USER: hermit
@@ -43,7 +43,6 @@ services:
       HERMIT_OIDC_ISSUER: '${HERMIT_OIDC_ISSUER:-}'
       HERMIT_OIDC_AUDIENCE: '${HERMIT_OIDC_AUDIENCE:-}'
       GOMEMLIMIT: 160MiB
-      HERMIT_CONSOLE: 'true'
     mem_limit: 256m
     memswap_limit: 256m
     ports:
@@ -53,6 +52,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+  console:
+    profiles: [console]
+    build: ./console
+    ports:
+      - '127.0.0.1:8081:80'
+    depends_on:
+      hermit:
+        condition: service_started
 volumes:
   pgdata:
   pgcerts:

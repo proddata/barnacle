@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -76,15 +75,32 @@ func apiError(w http.ResponseWriter, status int, err error) {
 func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	raw := r.Header.Get("Neon-Connection-String")
 	authorization := r.Header.Get("Authorization")
+	var suppliedUser, suppliedPassword string
 	if authorization == "" && raw == "" {
 		return nil, errors.New("bearer token or password connection string required")
 	}
-	if authorization == "" {
+	if raw != "" {
 		u, err := url.Parse(raw)
-		if err != nil || u.User == nil {
-			return nil, errors.New("password connection string required")
+		if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil || u.Opaque != "" || u.Fragment != "" {
+			return nil, errors.New("invalid PostgreSQL connection string")
 		}
-		if pw, ok := u.User.Password(); !ok || pw == "" {
+		suppliedUser = u.User.Username()
+		suppliedPassword, _ = u.User.Password()
+		if suppliedUser == "" {
+			return nil, errors.New("database and user required")
+		}
+		for key, values := range u.Query() {
+			switch key {
+			case "sslmode", "channel_binding", "application_name":
+			case "require_auth":
+				if len(values) != 1 || values[0] != "scram-sha-256" && values[0] != "md5" {
+					return nil, errors.New("unsupported PostgreSQL authentication method")
+				}
+			default:
+				return nil, errors.New("unsupported PostgreSQL connection option")
+			}
+		}
+		if authorization == "" && suppliedPassword == "" {
 			return nil, errors.New("password connection string required")
 		}
 	}
@@ -98,9 +114,14 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	pgcfg, err := pgx.ParseConfig(raw)
+	pgcfg, err := pgx.ParseConfigWithOptions(raw, pgx.ParseConfigOptions{ParseConfigOptions: pgconn.ParseConfigOptions{
+		ConnStringAllowedKeys: []string{"host", "port", "database", "user", "password", "sslmode", "channel_binding", "application_name", "require_auth"},
+	}})
 	if err != nil {
-		return nil, fmt.Errorf("invalid connection string: %w", err)
+		return nil, errors.New("invalid PostgreSQL connection string")
+	}
+	if suppliedUser != "" && pgcfg.User != suppliedUser || suppliedPassword != "" && pgcfg.Password != suppliedPassword {
+		return nil, errors.New("invalid PostgreSQL connection string")
 	}
 	host, portString, err := net.SplitHostPort(upstream)
 	if err != nil {

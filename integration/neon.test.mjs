@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client, neon, neonConfig } from '@neondatabase/serverless';
 import WebSocket from 'ws';
-import { runWebSocketQuery } from '../web/pgwire.mjs';
 
 globalThis.WebSocket = WebSocket;
 
@@ -442,10 +441,4 @@ test('Neon WebSocket Client authenticates and runs a query', async () => {
   } finally {
     await client.end();
   }
-});
-
-test('console WebSocket client uses SCRAM and PostgreSQL wire messages', async () => {
-  const wsURL = `${endpoint.protocol === 'https:' ? 'wss:' : 'ws:'}//${endpoint.host}/v2`;
-  const results = await runWebSocketQuery(databaseUrl, 'select 42 as answer', wsURL);
-  assert.equal(results[0].rows[0].answer, '42');
 });

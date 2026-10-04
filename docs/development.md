@@ -33,7 +33,7 @@ This local test uses a privileged container with its own cgroup namespace. It ch
 
 ## Test and inspect
 
-With the Compose stack running, test the same endpoint the console uses with the published Neon driver:
+With the Compose stack running, test Hermit with the published Neon driver:
 
 ```sh
 npm ci --prefix integration
@@ -42,7 +42,7 @@ HERMIT_BASE_URL='http://localhost:8080' \
 npm test --prefix integration
 ```
 
-The database URL's host is ignored by Hermit; PostgreSQL stays inside the Compose network. The suite covers HTTP queries and types, bearer forwarding, batches, gzip, Neon's WebSocket `Client`, and the console's SCRAM wire client.
+The database URL's host is ignored in fixed routing mode; PostgreSQL stays inside the Compose network. The suite covers HTTP queries and types, bearer forwarding, batches, gzip, and Neon's WebSocket `Client`. The optional [debug console](../console/) uses the same driver in the browser.
 
 For a native development setup with PostgreSQL listening on the host, run `go test -race ./...` and `go vet ./...`, then use `integration/run.sh` to build and start a temporary Hermit process:
 
@@ -89,4 +89,4 @@ Each JSON line records transport, configured connections, maximum observed in-fl
 
 For large results, `node integration/large-result.mjs --transport=ws --rows=100 --row-mib=1` requests 100 MiB and reports Hermit's cgroup peak and whether the query completed. Run it with `--transport=http` for the matching HTTP request, restarting Hermit between runs. In the [observed 100 MiB comparison](../benchmarks.md#100-mib-result-comparison), WebSocket stayed near 16–17 MiB; with the current pgx release, streamed HTTP peaked at 20.0 MiB for 100 rows and rejected one 100 MiB row with 413 at a 13.4 MiB peak. Raising `HERMIT_HTTP_MAX_ROW_MIB` allows the single-row case at a higher memory cost.
 
-The root Go package wires the server together. `internal/sqlhttp/` implements SQL over HTTP, `internal/pgws/` implements the PostgreSQL WebSocket tunnel, and `internal/gateway/` holds their shared authentication, routing, TLS, limits, and metrics. `web/` contains embedded browser modules, and `integration/` contains the Node suite. Hermit's integration tests use the published Neon driver.
+The root Go package wires the server together. `internal/sqlhttp/` implements SQL over HTTP, `internal/pgws/` implements the PostgreSQL WebSocket tunnel, and `internal/gateway/` holds their shared authentication, routing, TLS, limits, and metrics. `console/` is a separate optional browser app, and `integration/` contains the Node suite. Both use the published Neon driver.

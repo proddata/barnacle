@@ -13,7 +13,6 @@ Hermit is inspired by [Neon's wsproxy](https://github.com/neondatabase/wsproxy).
 | `GET /healthz` | Process liveness | Working |
 | `GET /readyz` | Process readiness; optionally checks PostgreSQL network and TLS | Working |
 | `GET /metrics` | Basic Prometheus metrics when enabled | Optional |
-| `GET /` | Manual console when `HERMIT_CONSOLE=true` | Development only |
 
 The HTTP response has `rows`, `fields`, `command`, `rowCount`, and `rowAsArray`; batch responses wrap these in `results`. DDL returns `rowCount: null` when PostgreSQL's command tag has no count. The driver requests `Neon-Raw-Text-Output: true` and `Neon-Array-Mode: true`, so it can apply its own PostgreSQL type parsers. Hermit accepts the corresponding headers, plus `Neon-Batch-Read-Only`, `Neon-Batch-Deferrable`, and all four driver `Neon-Batch-Isolation-Level` values. A query object's `arrayMode` can override the header for that query, including inside a batch. Aborting an HTTP request cancels its PostgreSQL query. WebSocket sessions relay PostgreSQL CancelRequest packets; when a client connection drops unexpectedly, Hermit also sends a bounded cancellation request to stop work left running on that backend.
 

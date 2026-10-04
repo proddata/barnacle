@@ -126,7 +126,6 @@ func main() {
 		PGSSLMode:            pgSSLMode,
 		PGRootCAs:            pgRootCAs,
 		AllowedOrigin:        os.Getenv("HERMIT_ALLOWED_ORIGIN"),
-		ConsoleEnabled:       strings.EqualFold(os.Getenv("HERMIT_CONSOLE"), "true"),
 		QueryTimeout:         timeout,
 		WSIdleTimeout:        wsIdleTimeout,
 		WSWriteTimeout:       wsWriteTimeout,
@@ -162,11 +161,6 @@ func main() {
 	}
 	mux.HandleFunc("GET /v1", wsHandler.Serve)
 	mux.HandleFunc("GET /v2", wsHandler.Serve)
-	if cfg.ConsoleEnabled {
-		mux.HandleFunc("GET /", console)
-		mux.HandleFunc("GET /console.mjs", consoleScript)
-		mux.HandleFunc("GET /pgwire.mjs", consoleScript)
-	}
 	server := &http.Server{
 		Addr: cfg.Listen, Handler: mux,
 		ReadHeaderTimeout: 10 * time.Second,

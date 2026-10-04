@@ -12,5 +12,9 @@
 /integration/.env.*
 !/integration/.env.example
 
+# Standalone SQL console build output
+/console/node_modules/
+/console/dist/
+
 # RPM build artifacts
 /dist/

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#111b23">
+  <title>Hermit SQL Console</title>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><div><strong>HERMIT</strong><span>SQL CONSOLE</span></div></div>
+      <div class="top-actions">
+        <button id="toggle-connection" class="subtle-button" type="button" aria-expanded="true" aria-controls="connection-panel">Connection <span aria-hidden="true">⌄</span></button>
+        <span id="connection-badge" class="connection-badge"><span class="status-dot"></span> Not connected</span>
+        <button id="run-query" class="primary-button" type="button"><span aria-hidden="true">▶</span> Run query <kbd>⌘/Ctrl ↵</kbd></button>
+        <button id="run-all" class="subtle-button run-all" type="button" title="Run every statement in this tab">Run all</button>
+      </div>
+    </header>
+
+    <section id="connection-panel" class="connection-panel" aria-label="Connection settings">
+      <div class="connection-manager">
+        <label>Saved connections <select id="connection-select" aria-label="Saved connections"></select></label>
+        <button id="new-connection" class="subtle-button" type="button">New</button>
+        <button id="save-connection" class="subtle-button" type="button">Save</button>
+        <button id="delete-connection" class="subtle-button" type="button">Delete</button>
+        <span class="connection-save-note">Connection details are saved locally. Custom passwords and tokens stay in this tab.</span>
+      </div>
+      <div class="connection-fields">
+        <label>Name <input id="connection-name" value="Local development" autocomplete="off"></label>
+        <label>Host <input id="host" value="postgres:5432" spellcheck="false" autocomplete="off" placeholder="postgres:5432"></label>
+        <label>Database <input id="database" value="hermit" spellcheck="false" autocomplete="off"></label>
+        <label>User <input id="username" value="hermit" spellcheck="false" autocomplete="off"></label>
+        <label id="password-field">Password <input id="password" type="password" value="hermit_dev_password" autocomplete="off"></label>
+        <label id="token-field" hidden>Bearer token <input id="token" type="password" autocomplete="off"></label>
+        <label>Transport
+          <select id="method">
+            <option value="http-password">HTTP · password</option>
+            <option value="http-bearer">HTTP · bearer</option>
+            <option value="ws-password">WebSocket · password</option>
+          </select>
+        </label>
+        <label id="auth-method-field">Require auth
+          <select id="auth-method">
+            <option value="">Automatic</option>
+            <option value="scram-sha-256">SCRAM-SHA-256</option>
+            <option value="md5">MD5</option>
+          </select>
+        </label>
+      </div>
+      <div class="connection-hint">The target host must be allowed by Hermit routing. In fixed mode, Hermit uses its configured upstream. The Compose development password is prefilled for local testing.</div>
+    </section>
+
+    <div id="workbench" class="workbench">
+      <aside id="explorer-panel" class="panel explorer-panel" aria-label="Database explorer">
+        <div class="panel-heading"><div><span class="eyebrow">DATABASE</span><h2>Explorer</h2></div><button id="refresh-schema" class="icon-button" type="button" title="Refresh schemas and tables" aria-label="Refresh schemas and tables">↻</button></div>
+        <div class="explorer-search"><span aria-hidden="true">⌕</span><input id="tree-filter" type="search" placeholder="Filter tables" aria-label="Filter tables"></div>
+        <div id="schema-tree" class="schema-tree"><p class="empty-note">Enter a password, then refresh to browse tables.</p></div>
+        <div class="panel-footnote">Click a table to preview rows. Expand it to inspect columns.</div>
+      </aside>
+      <div id="resize-left" class="resize-handle vertical" role="separator" tabindex="0" aria-label="Resize database explorer" aria-orientation="vertical"></div>
+
+      <main class="query-area">
+        <div class="editor-toolbar">
+          <div id="query-tabs" class="query-tabs" role="tablist" aria-label="SQL query tabs"></div>
+          <button id="new-tab" class="icon-button new-tab" type="button" title="New query tab" aria-label="New query tab">+</button>
+          <span class="toolbar-spacer"></span>
+          <button id="toggle-explorer" class="subtle-button compact" type="button" title="Toggle database explorer" aria-controls="explorer-panel" aria-expanded="true">Explorer</button>
+          <button id="toggle-debug" class="subtle-button compact" type="button" title="Toggle debug panel" aria-controls="debug-panel" aria-expanded="true">Debug</button>
+        </div>
+        <div class="editor-wrap"><div id="sql-editor" aria-label="SQL editor"></div></div>
+        <div id="resize-results" class="resize-handle horizontal" role="separator" tabindex="0" aria-label="Resize results panel" aria-orientation="horizontal"></div>
+        <section id="results-panel" class="results-panel" aria-label="Query results">
+          <div class="results-toolbar"><div class="result-tabs"><button id="view-data" class="result-tab active" type="button">Data</button><button id="view-json" class="result-tab" type="button">JSON</button></div><span id="result-summary" class="result-summary">No results yet</span><button id="export-csv" class="text-button" type="button" disabled>Export CSV</button></div>
+          <div id="statement-results" class="statement-results" role="tablist" aria-label="Statement results"></div>
+          <div id="result-data" class="result-content"><div class="result-empty"><span aria-hidden="true">⌘</span><strong>Ready to query</strong><p>Write SQL above, then run it to see results here.</p></div></div>
+          <pre id="result-json" class="result-json" hidden></pre>
+        </section>
+      </main>
+
+      <div id="resize-right" class="resize-handle vertical" role="separator" tabindex="0" aria-label="Resize debug panel" aria-orientation="vertical"></div>
+      <aside id="debug-panel" class="panel debug-panel" aria-label="Request debug panel">
+        <div class="panel-heading"><div><span class="eyebrow">ACTIVITY</span><h2>Request debug</h2></div><button id="clear-debug" class="text-button" type="button">Clear</button></div>
+        <p class="debug-note">Driver calls and response summaries from this page. Credentials are masked; SQL and parameters remain visible.</p>
+        <div id="trace-list" class="trace-list"><p class="empty-note">Run a query or refresh the explorer to inspect a call.</p></div>
+        <div id="trace-detail" class="trace-detail" hidden></div>
+      </aside>
+    </div>
+
+    <footer class="statusbar"><span id="status-message">Ready</span><span id="status-meta">PostgreSQL via Hermit</span></footer>
+  </div>
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>
