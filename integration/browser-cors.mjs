@@ -99,6 +99,7 @@ async function browserResult(port) {
     '--remote-allow-origins=*', '--remote-debugging-port=0',
     `--user-data-dir=${profile}`, 'about:blank',
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const closed = new Promise((resolve) => browser.once('close', resolve));
   let startupError;
   let exitStatus;
   let stderr = '';
@@ -149,6 +150,7 @@ async function browserResult(port) {
   } finally {
     socket?.close();
     browser.kill('SIGTERM');
+    await closed;
   }
 }
 
@@ -176,5 +178,5 @@ try {
   await close(deniedPage);
   for (const socket of mockSockets) socket.destroy();
   await close(mockPostgres);
-  for (const profile of profiles) await rm(profile, { recursive: true, force: true });
+  for (const profile of profiles) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
