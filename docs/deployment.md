@@ -2,6 +2,8 @@
 
 Hermit serves HTTP (`/sql`) and WebSocket (`/v2`) on one listener. Put an HTTPS/WSS ingress in front of that listener and keep PostgreSQL and PgBouncer on private addresses. There are two independent choices: **where the services run** (one host, adjacent containers, or separate private hosts) and **whether clients can select an upstream** (fixed or allowlisted). A same-host deployment can still offer both the direct and pooled paths.
 
+Run shell examples from the repository root.
+
 | Upstream choice | Settings | Same-host example | Container example |
 | --- | --- | --- | --- |
 | Direct only | Set `HERMIT_PG_ADDR`; leave `HERMIT_PG_ALLOWED_ADDRS` empty | `127.0.0.1:5432` | `postgres:5432` |
@@ -78,6 +80,15 @@ With routing enabled, HTTP takes the destination from the host and port in `Neon
 
 For the supplied Compose file, set `HERMIT_PG_ADDR=` explicitly when using an allowlist without a default; otherwise it supplies `postgres:5432` as its fixed-mode default. Both allowed names need valid TLS certificates. The same Hermit CA bundle and SSL mode apply to all routes.
 
+For both transports, direct the driver to Hermit while keeping the selected database or pooler address in its PostgreSQL connection string:
+
+```js
+neonConfig.fetchEndpoint = 'https://hermit.example.com/sql';
+neonConfig.wsProxy = 'hermit.example.com/v2'; // string form adds ?address=host:port
+```
+
+Keep the driver's `forceDisablePgSSL=true` default. The WebSocket client sends ordinary PostgreSQL wire messages inside WSS, while Hermit verifies TLS on the separate upstream connection. Hermit does not support client-initiated PostgreSQL TLS inside WebSocket. See [Neon's driver settings](https://github.com/neondatabase/serverless/blob/main/CONFIG.md) for the client-side options.
+
 ## Network boundary
 
 The upstream settings constrain which names and ports Hermit chooses for request-driven database connections. They do not replace network egress controls: DNS resolution determines the IP, and Hermit may also make outbound requests to an OIDC issuer for keys. `HERMIT_READY_PG_ADDR`, if set, makes a separate operator-configured TCP/TLS readiness probe; include it in the same destination policy. Place Hermit, PostgreSQL, and PgBouncer on a private network; publish only the ingress. Allow outbound traffic from Hermit to the intended database service IPs and ports (and to the issuer when OIDC is enabled) with the platform's firewall or network policy. Restrict PostgreSQL and PgBouncer listeners so that only expected clients can reach them. Keep ownership of the allowed DNS names and verify upstream TLS certificates.
@@ -109,6 +120,90 @@ networks:
 This fragment illustrates the two-route container configuration and network membership, not a complete runnable stack: add images, volumes, PgBouncer auth/TLS configuration, and a certificate mount. Set `HERMIT_PG_ALLOWED_ADDRS: ''` for a fixed PgBouncer route. An `internal: true` network has no external gateway, but Hermit can still reach other destinations through its `frontend` network. Apply egress rules there, including a narrow route to the OIDC issuer when needed. Do not rely on merely leaving `ports:` off a service as an egress restriction.
 
 On Kubernetes, use separate Services for PostgreSQL and PgBouncer and a NetworkPolicy (with a CNI that enforces it) for Hermit's egress and the database services' ingress. On a VM, use host firewall rules or equivalent cloud security groups. Across all modes, expose Hermit's listener through TLS termination and keep `/metrics` and the development console private.
+
+The supplied [HAProxy example](../haproxy.cfg) terminates HTTPS/WSS, has WebSocket-friendly timeouts, and forwards client aborts with `option abortonclose` so Hermit can cancel HTTP work. Set `X-Forwarded-Proto: https` if serving the console through TLS.
+
+## Configuration reference
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `HERMIT_LISTEN` | `:8080` | HTTP and WebSocket listen address |
+| `HERMIT_PG_ADDR` | `127.0.0.1:5432` in fixed mode; unset in routing mode | Fixed destination, or optional allowlisted fallback when routing is enabled |
+| `HERMIT_PG_ALLOWED_ADDRS` | empty | Enable request-based routing to these exact `host:port` destinations |
+| `HERMIT_PG_USER` | `postgres` | Default user for bearer HTTP requests |
+| `HERMIT_PG_DATABASE` | `postgres` | Default database for bearer HTTP requests |
+| `HERMIT_PG_SSLMODE` | `require` | Upstream TLS for HTTP and WebSocket: `require` verifies the server certificate and hostname; `disable` permits plaintext on a trusted local network |
+| `HERMIT_PG_CA_FILE` | empty | Optional PEM CA bundle for the upstream PostgreSQL certificate; empty uses the system trust store |
+| `HERMIT_QUERY_TIMEOUT` | `30s` | HTTP connection and query deadline |
+| `HERMIT_HTTP_READ_TIMEOUT` | `15s` | Maximum time to read an HTTP request, including its body; the WebSocket handshake is subject to this until upgrade |
+| `HERMIT_HTTP_IDLE_TIMEOUT` | `60s` | Maximum idle time between HTTP keep-alive requests; upgraded WebSockets use `HERMIT_WS_IDLE_TIMEOUT` instead |
+| `HERMIT_READY_PG_ADDR` | empty | Optional `host:port` probe for `/readyz`; checks TCP and configured PostgreSQL TLS, without authentication |
+| `HERMIT_METRICS` | `false` | Expose `GET /metrics` on the main listener; keep it private |
+| `HERMIT_WS_IDLE_TIMEOUT` | `30m` | Close a WebSocket session after this long without client frames or PostgreSQL output |
+| `HERMIT_WS_WRITE_TIMEOUT` | `30s` | Maximum time for each WebSocket or upstream PostgreSQL write |
+| `HERMIT_MAX_CONNECTIONS` | `32` | Maximum simultaneous HTTP and WebSocket PostgreSQL connections; excess requests receive 503 |
+| `HERMIT_MAX_HTTP_QUERIES` | `8` | Maximum simultaneous HTTP queries; excess requests receive 503 |
+| `HERMIT_HTTP_MAX_ROW_MIB` | `8` | Maximum raw PostgreSQL field data in one HTTP row |
+| `HERMIT_HTTP_MAX_BUFFERED_MIB` | `4` | Total field data plus estimated row overhead retained across a buffered batch or custom-type result |
+| `HERMIT_HTTP_MAX_RESPONSE_MIB` | `128` | Maximum uncompressed HTTP result JSON bytes |
+| `HERMIT_OIDC_ISSUER` | empty | Exact issuer URL; set with `HERMIT_OIDC_AUDIENCE` to enable the access-token gate |
+| `HERMIT_OIDC_AUDIENCE` | empty | Required resource audience when the OIDC gate is enabled |
+| `HERMIT_ALLOWED_ORIGIN` | empty | One additional allowed browser origin, e.g. `https://app.example.com` |
+| `HERMIT_CONSOLE` | `false` | Expose the manual console at `/` |
+
+A WebSocket query that produces no output for longer than `HERMIT_WS_IDLE_TIMEOUT` will be disconnected. Raise that setting for longer quiet queries; PostgreSQL's own `statement_timeout` remains the query-duration limit.
+
+`/healthz` checks that Hermit is running. `/readyz` returns 200 when ready; set `HERMIT_READY_PG_ADDR` to enable a PostgreSQL transport probe, which returns 503 if the address cannot be reached or its TLS certificate fails verification. The probe does not log in or run SQL. `/metrics` is disabled by default. When enabled, it serves Prometheus text format with active WebSockets, SQL request and HTTP error counts, a SQL duration histogram, connection-limit rejections, and failed upstream connections. A failed upstream connection includes network, TLS, and PostgreSQL authentication failures. These metrics contain no query text or credentials. Restrict access to `/metrics` at your ingress if the main listener is exposed. An OpenTelemetry Collector can scrape this endpoint with its Prometheus receiver; Hermit does not currently emit OTLP or traces itself.
+
+Same-origin browser requests work without extra configuration. Set `HERMIT_ALLOWED_ORIGIN` to the exact origin of a separate frontend. Do not expose the development console publicly. Compose's generated CA is only for local testing; deploy with a CA you trust for your PostgreSQL server. For both transports, a failed TLS handshake or certificate check prevents the database session.
+
+## Ubuntu and Debian service
+
+Install the `.deb` for your architecture from CI or [build it locally](development.md#release-binaries-container-and-debian-package), then edit `/etc/default/hermit` and enable the service:
+
+```sh
+sudo apt install ./dist/hermit_0.1.0_amd64.deb # example for amd64
+sudoedit /etc/default/hermit
+sudo systemctl enable --now hermit
+```
+
+The package supplies the same basic systemd hardening as the Fedora service below. Set `HERMIT_PG_ADDR` and the PostgreSQL CA for the intended deployment before serving traffic.
+
+## Fedora service
+
+Install an RPM from CI or [build one locally](development.md#fedora-rpm):
+
+```sh
+sudo dnf install ./dist/hermit-*.rpm
+sudoedit /etc/sysconfig/hermit
+sudo systemctl enable --now hermit
+```
+
+The package installs `/usr/bin/hermit`, a systemd service, and `/etc/sysconfig/hermit`. The service listens on `127.0.0.1:8080` and connects to PostgreSQL on `127.0.0.1:5432` by default, so set the latter in the config file if PostgreSQL is elsewhere. It includes Hermit's [Apache-2.0 license](../LICENSE) and the [third-party license inventory](../THIRD-PARTY-NOTICES.md).
+
+The unit restarts Hermit after a crash or OOM kill, waits five seconds between attempts, and stops after five starts in one minute. On SIGTERM, Hermit stops accepting requests, gives active HTTP queries up to ten seconds to finish, sends WebSocket close code 1001, and cancels running PostgreSQL work for those sessions. The unit allows 15 seconds before forcing the process to stop. Its cgroup begins throttling at 192 MiB and has a hard 256 MiB memory limit with no swap; `GOMEMLIMIT=160MiB` asks Go to collect earlier. `OOMScoreAdjust=500` makes Hermit a more likely victim than an unadjusted PostgreSQL process if the whole host runs out of memory. These are starter limits for a small proxy; measure your query sizes and concurrent WebSocket sessions before raising them. The hard limit keeps Hermit's memory use bounded, but a request that needs more memory can fail and drop its connection.
+
+Inspect restarts and memory use with `systemctl status hermit`, `journalctl -u hermit`, and `systemctl show hermit -p MemoryCurrent -p MemoryPeak -p NRestarts`. Tune cgroup limits without editing the packaged unit:
+
+```sh
+sudo systemctl edit hermit
+```
+
+In the editor, add:
+
+```ini
+[Service]
+MemoryHigh=384M
+MemoryMax=512M
+```
+
+Then restart the service:
+
+```sh
+sudo systemctl restart hermit
+```
+
+Also adjust `GOMEMLIMIT` in `/etc/sysconfig/hermit` when changing `MemoryMax`. If repeated failures hit the start limit, fix the cause and run `sudo systemctl reset-failed hermit && sudo systemctl start hermit`. `HERMIT_MAX_CONNECTIONS=32` limits the PostgreSQL backends Hermit can create across both transports; tune it below PostgreSQL's available connection budget. PostgreSQL still needs its own work memory and statement timeout settings.
 
 ## Deployment checks
 

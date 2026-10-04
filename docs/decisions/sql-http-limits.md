@@ -34,7 +34,7 @@ The row, buffer, response, and concurrency values are configurable today. The re
 
 - Under a 256 MiB Hermit cgroup, a 100 MiB single row used about **116.6 MiB** before the wire-size cap. With the default 8 MiB row cap, it returned 413 at a **13.4 MiB** peak. A 100 × 1 MiB HTTP result completed at about **20 MiB** peak. See [large-result measurements](../../benchmarks.md#100-mib-result-comparison).
 - A local small-query test completed about **500 HTTP QPS** with eight in-flight slots, **6.7 ms p95**, and about **17 MiB** sampled Hermit peak. This is a Docker Desktop result, not a target-host capacity guarantee. See [connection-cost measurements](../../benchmarks.md#http-connection-reuse-decision).
-- Existing integration tests check HTTP 413 behavior for oversized rows and buffered results. [Current settings](../../README.md#deploy-near-postgresql) and [implementation](../../internal/sqlhttp/sql.go) define the enforced limits.
+- Existing integration tests check HTTP 413 behavior for oversized rows and buffered results. [Current settings](../deployment.md#configuration-reference) and [implementation](../../internal/sqlhttp/sql.go) define the enforced limits.
 
 ## Decision gate
 

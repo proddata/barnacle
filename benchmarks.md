@@ -15,7 +15,7 @@ These are **observations**, not capacity guarantees. They were collected on 2026
 
 The HTTP connection number is an **in-flight cap**. Fast HTTP queries typically use far fewer simultaneous PostgreSQL backends than that cap. The 200 ms case exercised overlap and observed 25 in flight. WebSocket clients remained connected throughout each run. Baseline Hermit memory after each restart was about 6 MiB, except for the 200 ms case, which followed another benchmark and began at 13.9 MiB. Since its peak was 16.4 MiB, rerun profiles on a quiet target host before choosing production limits.
 
-These samples do not measure PostgreSQL backend memory, CPU saturation, maximum capacity, or short memory spikes between samples. PostgreSQL query shape, result size, authentication method, concurrent clients, HAProxy, and Fedora host memory will affect the numbers. For an installed Fedora service, `--memory-source=systemd` samples `MemoryCurrent` from `hermit.service`; see the [benchmark instructions](README.md#measure-memory-under-load).
+These samples do not measure PostgreSQL backend memory, CPU saturation, maximum capacity, or short memory spikes between samples. PostgreSQL query shape, result size, authentication method, concurrent clients, HAProxy, and Fedora host memory will affect the numbers. For an installed Fedora service, `--memory-source=systemd` samples `MemoryCurrent` from `hermit.service`; see the [benchmark instructions](docs/development.md#measure-memory-under-load).
 
 ## 100 MiB result comparison
 
