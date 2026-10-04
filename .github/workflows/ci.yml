@@ -8,6 +8,49 @@ permissions:
   contents: read
 
 jobs:
+  postgres-compatibility:
+    name: PostgreSQL ${{ matrix.postgres }} compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      # PostgreSQL 17 runs the full Ubuntu job below. Drop 14 after its November 2026 EOL.
+      matrix:
+        postgres: ['14', '15', '16', '18']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: hermit
+          POSTGRES_PASSWORD: hermit_dev_password
+          POSTGRES_DB: hermit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: integration/package-lock.json
+      - run: npm ci --prefix integration
+      - name: Neon driver integration tests
+        env:
+          HERMIT_PG_ADDR: 127.0.0.1:5432
+          HERMIT_PG_SSLMODE: disable
+          HERMIT_PG_USER: hermit
+          HERMIT_PG_DATABASE: hermit
+          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@localhost:5432/hermit
+        run: ./integration/run.sh
+
   ubuntu:
     runs-on: ubuntu-latest
     services:
