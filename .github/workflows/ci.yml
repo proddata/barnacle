@@ -61,6 +61,37 @@ jobs:
           TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@127.0.0.1:5432/hermit
           HERMIT_ROUTING_ONLY: '1'
         run: ./integration/run.sh
+      - name: Direct and PgBouncer routes on one host
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pgbouncer postgresql-client
+          sudo systemctl stop pgbouncer || true
+          printf '"hermit" "hermit_dev_password"\n' > "$RUNNER_TEMP/pgbouncer-users.txt"
+          cat > "$RUNNER_TEMP/pgbouncer.ini" <<EOF
+          [databases]
+          hermit = host=127.0.0.1 port=5432 dbname=hermit
+          [pgbouncer]
+          listen_addr = 127.0.0.1
+          listen_port = 6432
+          auth_type = scram-sha-256
+          auth_file = $RUNNER_TEMP/pgbouncer-users.txt
+          pool_mode = transaction
+          client_tls_sslmode = disable
+          server_tls_sslmode = disable
+          EOF
+          pgbouncer "$RUNNER_TEMP/pgbouncer.ini" > "$RUNNER_TEMP/pgbouncer.log" 2>&1 &
+          pooler_pid=$!
+          trap 'kill "$pooler_pid" 2>/dev/null || true; wait "$pooler_pid" 2>/dev/null || true' EXIT
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if pg_isready -h 127.0.0.1 -p 6432 -U hermit -d hermit >/dev/null; then break; fi
+            sleep 1
+          done
+          HERMIT_PG_ADDR=127.0.0.1:6432 \
+          HERMIT_PG_ALLOWED_ADDRS=127.0.0.1:5432,127.0.0.1:6432 \
+          HERMIT_PG_SSLMODE=disable \
+          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@127.0.0.1:5432/hermit \
+          TEST_SECOND_DATABASE_URL=postgres://hermit:hermit_dev_password@127.0.0.1:6432/hermit \
+          HERMIT_ROUTING_ONLY=1 ./integration/run.sh || { cat "$RUNNER_TEMP/pgbouncer.log"; exit 1; }
       - run: docker compose config --quiet
       - run: docker build -t hermit:ci .
       - name: Container vulnerability scan
@@ -138,6 +169,62 @@ jobs:
         with:
           name: hermit-fedora-rpm
           path: dist/hermit-*.rpm
+
+  release-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build static Linux binaries
+        run: ./packaging/release/build.sh
+      - name: Build and inspect Debian packages
+        run: |
+          ./packaging/deb/build.sh
+          dpkg-deb --info dist/hermit_*_amd64.deb
+          dpkg-deb --contents dist/hermit_*_amd64.deb | grep -q '/usr/bin/hermit'
+          sudo dpkg -i dist/hermit_*_amd64.deb
+          systemd-analyze verify /usr/lib/systemd/system/hermit.service
+      - name: Smoke-test release binary
+        run: |
+          HERMIT_LISTEN=127.0.0.1:18080 HERMIT_PG_ADDR=127.0.0.1:1 HERMIT_PG_SSLMODE=disable dist/hermit-linux-amd64 >/tmp/hermit-release.log 2>&1 &
+          hermit_pid=$!
+          trap 'kill "$hermit_pid" 2>/dev/null || true; wait "$hermit_pid" 2>/dev/null || true' EXIT
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --silent --fail http://127.0.0.1:18080/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/hermit-release.log
+          exit 1
+      - name: Build and smoke-test binary-based container
+        run: |
+          docker build --file Dockerfile.release --platform linux/amd64 -t hermit:release-ci .
+          docker run --rm -d --name hermit-release-ci -p 127.0.0.1:18081:8080 hermit:release-ci
+          trap 'docker stop hermit-release-ci >/dev/null 2>&1 || true' EXIT
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --silent --fail http://127.0.0.1:18081/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker logs hermit-release-ci
+          exit 1
+      - name: Scan binary-based container
+        run: |
+          docker save -o "$RUNNER_TEMP/hermit-release-ci.tar" hermit:release-ci
+          docker run --rm -v "$RUNNER_TEMP:/scan:ro" aquasec/trivy:0.75.0 image \
+            --input /scan/hermit-release-ci.tar --scanners vuln --severity HIGH,CRITICAL \
+            --exit-code 1 --no-progress
+      - name: Build attested OCI image archive
+        run: ./packaging/release/image.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hermit-release-candidate
+          path: |
+            dist/hermit-linux-amd64
+            dist/hermit-linux-arm64
+            dist/SHA256SUMS
+            dist/hermit_*.deb
+            dist/hermit-image.oci.tar
 
   oauth-postgres18:
     runs-on: ubuntu-latest

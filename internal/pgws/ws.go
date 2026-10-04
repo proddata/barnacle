@@ -104,12 +104,14 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !c.AcquireUpstream() {
+		c.Metrics.RejectUpstream()
 		http.Error(w, "postgres connection limit reached", http.StatusServiceUnavailable)
 		return
 	}
 	defer c.ReleaseUpstream()
 	backend, err := c.DialPostgres(upstream)
 	if err != nil {
+		c.Metrics.UpstreamFailure()
 		http.Error(w, "postgres unavailable", http.StatusBadGateway)
 		return
 	}

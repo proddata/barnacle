@@ -1,0 +1,9 @@
+# Build from the tested release binary, not from source or a Go toolchain.
+# Create dist/hermit-linux-amd64 and dist/hermit-linux-arm64 first.
+FROM gcr.io/distroless/static-debian13:nonroot
+ARG TARGETARCH
+COPY dist/hermit-linux-${TARGETARCH} /usr/local/bin/hermit
+COPY LICENSE THIRD-PARTY-NOTICES.md /usr/share/doc/hermit/
+COPY THIRD-PARTY-LICENSES/ /usr/share/doc/hermit/THIRD-PARTY-LICENSES/
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/hermit"]

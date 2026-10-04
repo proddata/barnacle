@@ -8,14 +8,32 @@ import (
 )
 
 type Metrics struct {
-	websocketActive atomic.Int64
-	sqlRequests     atomic.Uint64
-	sqlErrors       atomic.Uint64
-	sqlDurationNS   atomic.Uint64
-	sqlLatency      [6]atomic.Uint64
+	websocketActive  atomic.Int64
+	sqlRequests      atomic.Uint64
+	sqlErrors        atomic.Uint64
+	sqlDurationNS    atomic.Uint64
+	sqlLatency       [6]atomic.Uint64
+	httpLimitRejects atomic.Uint64
+	upstreamRejects  atomic.Uint64
+	upstreamFailures atomic.Uint64
 }
 
 func (m *Metrics) AddWebSocket(delta int64) { m.websocketActive.Add(delta) }
+func (m *Metrics) RejectHTTPQuery() {
+	if m != nil {
+		m.httpLimitRejects.Add(1)
+	}
+}
+func (m *Metrics) RejectUpstream() {
+	if m != nil {
+		m.upstreamRejects.Add(1)
+	}
+}
+func (m *Metrics) UpstreamFailure() {
+	if m != nil {
+		m.upstreamFailures.Add(1)
+	}
+}
 
 var sqlLatencyBounds = [...]time.Duration{10 * time.Millisecond, 50 * time.Millisecond, 100 * time.Millisecond, 500 * time.Millisecond, time.Second, 5 * time.Second}
 
@@ -72,6 +90,8 @@ func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "# TYPE hermit_websocket_active gauge\nhermit_websocket_active %d\n", m.websocketActive.Load())
 	_, _ = fmt.Fprintf(w, "# TYPE hermit_sql_requests_total counter\nhermit_sql_requests_total %d\n", m.sqlRequests.Load())
 	_, _ = fmt.Fprintf(w, "# TYPE hermit_sql_errors_total counter\nhermit_sql_errors_total %d\n", m.sqlErrors.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE hermit_limit_rejections_total counter\nhermit_limit_rejections_total{limit=\"http_queries\"} %d\nhermit_limit_rejections_total{limit=\"upstream_connections\"} %d\n", m.httpLimitRejects.Load(), m.upstreamRejects.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE hermit_upstream_connection_failures_total counter\nhermit_upstream_connection_failures_total %d\n", m.upstreamFailures.Load())
 	_, _ = fmt.Fprintln(w, "# TYPE hermit_sql_duration_seconds histogram")
 	for i, label := range [...]string{"0.01", "0.05", "0.1", "0.5", "1", "5"} {
 		_, _ = fmt.Fprintf(w, "hermit_sql_duration_seconds_bucket{le=%q} %d\n", label, m.sqlLatency[i].Load())

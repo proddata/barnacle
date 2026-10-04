@@ -180,6 +180,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !c.AcquireHTTP() {
+		c.Metrics.RejectHTTPQuery()
 		apiError(w, http.StatusServiceUnavailable, errors.New("HTTP query limit reached"))
 		return
 	}
@@ -196,6 +197,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !c.AcquireUpstream() {
+		c.Metrics.RejectUpstream()
 		apiError(w, http.StatusServiceUnavailable, errors.New("postgres connection limit reached"))
 		return
 	}
@@ -204,6 +206,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	conn, err := pgx.ConnectConfig(ctx, pgcfg)
 	if err != nil {
+		c.Metrics.UpstreamFailure()
 		dbError(w, err)
 		return
 	}

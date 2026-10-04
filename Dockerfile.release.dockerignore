@@ -1,0 +1,8 @@
+*
+!dist/
+!dist/hermit-linux-amd64
+!dist/hermit-linux-arm64
+!LICENSE
+!THIRD-PARTY-NOTICES.md
+!THIRD-PARTY-LICENSES/
+!THIRD-PARTY-LICENSES/**

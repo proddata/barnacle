@@ -174,9 +174,21 @@ Allow only database addresses you control. Hermit resolves the listed hostnames 
 
 A WebSocket query that produces no output for longer than `HERMIT_WS_IDLE_TIMEOUT` will be disconnected. Raise that setting for longer quiet queries; PostgreSQL's own `statement_timeout` remains the query-duration limit.
 
-`/healthz` checks that Hermit is running. `/readyz` returns 200 when ready; set `HERMIT_READY_PG_ADDR` to enable a PostgreSQL transport probe, which returns 503 if the address cannot be reached or its TLS certificate fails verification. The probe does not log in or run SQL. `/metrics` is disabled by default. When enabled, it reports active WebSockets, SQL request and HTTP error counts, and a SQL request duration histogram without query text or credentials. Restrict access to that path at your ingress if the main listener is exposed.
+`/healthz` checks that Hermit is running. `/readyz` returns 200 when ready; set `HERMIT_READY_PG_ADDR` to enable a PostgreSQL transport probe, which returns 503 if the address cannot be reached or its TLS certificate fails verification. The probe does not log in or run SQL. `/metrics` is disabled by default. When enabled, it serves Prometheus text format with active WebSockets, SQL request and HTTP error counts, a SQL duration histogram, connection-limit rejections, and failed upstream connections. A failed upstream connection includes network, TLS, and PostgreSQL authentication failures. These metrics contain no query text or credentials. Restrict access to `/metrics` at your ingress if the main listener is exposed. An OpenTelemetry Collector can scrape this endpoint with its Prometheus receiver; Hermit does not currently emit OTLP or traces itself.
 
 Same-origin browser requests work without extra configuration. Set `HERMIT_ALLOWED_ORIGIN` to the exact origin of a separate frontend. Do not expose the development console publicly. Compose's generated CA is only for local testing; deploy with a CA you trust for your PostgreSQL server. For both transports, a failed TLS handshake or certificate check prevents the database session.
+
+### Release binaries, container, and Debian package
+
+The default [Dockerfile](Dockerfile) builds Hermit from source but has no Go toolchain in its runtime stage. For a release built from one tested set of static Linux binaries, run:
+
+```sh
+./packaging/release/build.sh  # linux/amd64 and linux/arm64; writes dist/SHA256SUMS
+./packaging/deb/build.sh      # requires dpkg-deb; writes both .deb packages
+docker build -f Dockerfile.release --platform linux/amd64 -t hermit:release .
+```
+
+Use the matching architecture for a local container build. [Dockerfile.release](Dockerfile.release) copies the prebuilt binary into a nonroot distroless image with CA certificates and license notices; it does not run Go or copy source files. The Debian package installs `/usr/bin/hermit`, a systemd unit, and `/etc/default/hermit`; edit that file and run `sudo systemctl enable --now hermit`. `./packaging/release/image.sh` produces a multi-platform OCI archive with SBOM and build provenance attestations, without publishing it. CI builds and tests these release candidates. The existing [RPM](packaging/rpm/hermit.spec) continues to build independently from source and has its own Fedora smoke test.
 
 ### Fedora
 

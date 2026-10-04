@@ -14,17 +14,21 @@ neonConfig.wsProxy = `${endpoint.host}/v2`; // Driver appends ?address=host:port
 neonConfig.pipelineConnect = false;
 neonConfig.forceDisablePgSSL = true;
 
-const sql = neon(databaseUrl);
-const rows = await sql`select 42::int as answer`;
-assert.equal(rows[0].answer, 42);
+const databaseUrls = [databaseUrl];
+if (process.env.TEST_SECOND_DATABASE_URL) databaseUrls.push(process.env.TEST_SECOND_DATABASE_URL);
+for (const url of databaseUrls) {
+  const sql = neon(url);
+  const rows = await sql`select 42::int as answer`;
+  assert.equal(rows[0].answer, 42);
 
-const client = new Client(databaseUrl);
-try {
-  await client.connect();
-  const result = await client.query('select 43::int as answer');
-  assert.equal(result.rows[0].answer, 43);
-} finally {
-  await client.end();
+  const client = new Client(url);
+  try {
+    await client.connect();
+    const result = await client.query('select 43::int as answer');
+    assert.equal(result.rows[0].answer, 43);
+  } finally {
+    await client.end();
+  }
 }
 
 const forbidden = new URL(databaseUrl);
@@ -51,4 +55,4 @@ const wsStatus = await new Promise((resolve, reject) => {
 });
 assert.equal(wsStatus, 400);
 
-console.log('Neon HTTP and WebSocket routing passed; unlisted address rejected');
+console.log(`Neon HTTP and WebSocket routing passed for ${databaseUrls.length} target(s); unlisted address rejected`);
