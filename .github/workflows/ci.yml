@@ -141,8 +141,20 @@ jobs:
   fedora-rpm:
     runs-on: ubuntu-latest
     container: fedora:latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: hermit
+          POSTGRES_PASSWORD: hermit_dev_password
+          POSTGRES_DB: hermit
+        options: >-
+          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
     steps:
-      - run: dnf install -y golang git tar gzip rpm-build systemd-rpm-macros systemd curl
+      - run: dnf install -y golang nodejs npm git tar gzip rpm-build systemd-rpm-macros systemd curl
       - uses: actions/checkout@v7
       - name: Build Fedora RPM
         run: ./packaging/rpm/build.sh
@@ -156,15 +168,13 @@ jobs:
           dnf install -y dist/hermit-*.rpm
           rpm -V hermit
           systemd-analyze verify hermit.service
-          HERMIT_LISTEN=127.0.0.1:18080 HERMIT_PG_ADDR=127.0.0.1:1 HERMIT_PG_SSLMODE=disable /usr/bin/hermit >/tmp/hermit-rpm.log 2>&1 &
-          hermit_pid=$!
-          trap 'kill "$hermit_pid" 2>/dev/null || true; wait "$hermit_pid" 2>/dev/null || true' EXIT
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if curl --silent --fail http://127.0.0.1:18080/healthz >/dev/null; then exit 0; fi
-            sleep 1
-          done
-          cat /tmp/hermit-rpm.log
-          exit 1
+      - run: npm ci --prefix integration
+      - name: Query through installed RPM
+        env:
+          HERMIT_PG_ADDR: postgres:5432
+          HERMIT_PG_SSLMODE: disable
+          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@postgres:5432/hermit
+        run: ./integration/release-smoke.sh /usr/bin/hermit
       - uses: actions/upload-artifact@v7
         with:
           name: hermit-fedora-rpm
@@ -172,11 +182,31 @@ jobs:
 
   release-artifacts:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: hermit
+          POSTGRES_PASSWORD: hermit_dev_password
+          POSTGRES_DB: hermit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: integration/package-lock.json
+      - run: npm ci --prefix integration
       - name: Build static Linux binaries
         run: ./packaging/release/build.sh
       - name: Build and inspect Debian packages
@@ -186,28 +216,32 @@ jobs:
           dpkg-deb --contents dist/hermit_*_amd64.deb | grep -q '/usr/bin/hermit'
           sudo dpkg -i dist/hermit_*_amd64.deb
           systemd-analyze verify /usr/lib/systemd/system/hermit.service
-      - name: Smoke-test release binary
+      - name: Query through installed Debian package
+        env:
+          HERMIT_PG_ADDR: 127.0.0.1:5432
+          HERMIT_PG_SSLMODE: disable
+          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@localhost:5432/hermit
         run: |
-          HERMIT_LISTEN=127.0.0.1:18080 HERMIT_PG_ADDR=127.0.0.1:1 HERMIT_PG_SSLMODE=disable dist/hermit-linux-amd64 >/tmp/hermit-release.log 2>&1 &
-          hermit_pid=$!
-          trap 'kill "$hermit_pid" 2>/dev/null || true; wait "$hermit_pid" 2>/dev/null || true' EXIT
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if curl --silent --fail http://127.0.0.1:18080/healthz >/dev/null; then exit 0; fi
-            sleep 1
-          done
-          cat /tmp/hermit-release.log
-          exit 1
-      - name: Build and smoke-test binary-based container
+          cmp dist/hermit-linux-amd64 /usr/bin/hermit
+          ./integration/release-smoke.sh /usr/bin/hermit
+      - name: Build and query through binary-based container
         run: |
           docker build --file Dockerfile.release --platform linux/amd64 -t hermit:release-ci .
-          docker run --rm -d --name hermit-release-ci -p 127.0.0.1:18081:8080 hermit:release-ci
+          docker run --rm -d --name hermit-release-ci --network host \
+            -e HERMIT_LISTEN=127.0.0.1:18081 \
+            -e HERMIT_PG_ADDR=127.0.0.1:5432 \
+            -e HERMIT_PG_SSLMODE=disable \
+            hermit:release-ci
           trap 'docker stop hermit-release-ci >/dev/null 2>&1 || true' EXIT
+          ready=0
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if curl --silent --fail http://127.0.0.1:18081/healthz >/dev/null; then exit 0; fi
+            if curl --silent --fail http://127.0.0.1:18081/healthz >/dev/null; then ready=1; break; fi
             sleep 1
           done
-          docker logs hermit-release-ci
-          exit 1
+          if [ "$ready" -ne 1 ]; then docker logs hermit-release-ci; exit 1; fi
+          HERMIT_BASE_URL=http://127.0.0.1:18081 \
+          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit \
+            node integration/release-smoke.mjs || { docker logs hermit-release-ci; exit 1; }
       - name: Scan binary-based container
         run: |
           docker save -o "$RUNNER_TEMP/hermit-release-ci.tar" hermit:release-ci
