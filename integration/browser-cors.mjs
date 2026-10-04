@@ -109,11 +109,14 @@ async function browserResult(port) {
   let socket;
   try {
     let debugPort;
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 300; i++) {
       try {
         debugPort = Number((await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]);
         break;
-      } catch { await delay(100); }
+      } catch {
+        if (startupError || exitStatus) break;
+        await delay(100);
+      }
     }
     assert.ok(debugPort, `Chrome debugging port did not start (exit: ${JSON.stringify(exitStatus)}, error: ${startupError?.message ?? 'none'}, stderr: ${stderr || 'empty'})`);
     const pages = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json();
