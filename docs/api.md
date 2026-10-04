@@ -7,7 +7,7 @@ Hermit is inspired by [Neon's wsproxy](https://github.com/neondatabase/wsproxy).
 | Method and path | Purpose | State |
 | --- | --- | --- |
 | `POST /sql` | One parameterized query: `{ "query": "...", "params": [] }` | Working subset |
-| `POST /sql` | Atomic batch: `{ "queries": [{ "query": "...", "params": [] }] }` | Working subset |
+| `POST /sql` | Sequential queries in one transaction: `{ "queries": [{ "query": "...", "params": [] }] }` | Working subset |
 | `OPTIONS /sql` | Browser CORS preflight | Working |
 | `GET /v2`, `GET /v1` | WebSocket upgrade; binary PostgreSQL wire bytes | Working |
 | `GET /healthz` | Process liveness | Working |
@@ -16,6 +16,8 @@ Hermit is inspired by [Neon's wsproxy](https://github.com/neondatabase/wsproxy).
 | `GET /` | Manual console when `HERMIT_CONSOLE=true` | Development only |
 
 The HTTP response has `rows`, `fields`, `command`, `rowCount`, and `rowAsArray`; batch responses wrap these in `results`. DDL returns `rowCount: null` when PostgreSQL's command tag has no count. The driver requests `Neon-Raw-Text-Output: true` and `Neon-Array-Mode: true`, so it can apply its own PostgreSQL type parsers. Hermit accepts the corresponding headers, plus `Neon-Batch-Read-Only`, `Neon-Batch-Deferrable`, and all four driver `Neon-Batch-Isolation-Level` values. A query object's `arrayMode` can override the header for that query, including inside a batch. Aborting an HTTP request cancels its PostgreSQL query. WebSocket sessions relay PostgreSQL CancelRequest packets; when a client connection drops unexpectedly, Hermit also sends a bounded cancellation request to stop work left running on that backend.
+
+Hermit does not parse SQL inside a batch query object. The [batch semantics decision](decisions/http-batch-semantics.md) records the open question of enforcing single-statement and transaction-control boundaries before promising unconditional atomicity.
 
 `POST /sql` compresses JSON responses of 1 KiB or more when the client sends `Accept-Encoding: gzip`. Small responses stay plain. The Neon driver uses `fetch()`, so browser and Node HTTP stacks handle response decompression; the driver itself does not set a gzip option. Request bodies remain plain JSON.
 

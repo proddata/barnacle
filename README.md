@@ -70,7 +70,7 @@ Addresses may instead be loopback ports on one host, such as `127.0.0.1:5432` an
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /sql` | One query or an atomic batch over HTTP |
+| `POST /sql` | One query or a transactional batch over HTTP |
 | `GET /v2` (`/v1` also works) | PostgreSQL wire session over WebSocket |
 | `GET /healthz`, `GET /readyz` | Liveness and optional PostgreSQL transport readiness |
 | `GET /metrics` | Optional Prometheus metrics (`HERMIT_METRICS=true`) |
