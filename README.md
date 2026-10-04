@@ -1,8 +1,8 @@
 # Hermit 🦀
 
-**A web gateway for PostgreSQL, wherever it runs.** Hermit exposes short SQL queries over HTTP and PostgreSQL sessions over WebSocket. It can sit in front of a self-hosted database or a managed PostgreSQL service, as long as the database is reachable from Hermit and supports the configured authentication method. This makes PostgreSQL accessible to serverless applications and agent-driven workflows through HTTPS and WSS, while keeping the database address fixed on the server.
+**A web gateway for PostgreSQL, wherever it runs.** Hermit exposes short SQL queries over HTTP and PostgreSQL sessions over WebSocket. It can sit in front of a self-hosted database or a managed PostgreSQL service, as long as the database is reachable from Hermit and supports the configured authentication method. This makes PostgreSQL accessible to serverless applications and agent-driven workflows through HTTPS and WSS, with server-controlled upstream destinations.
 
-Hermit implements a subset of the interface used by the Neon serverless driver, so applications can use that driver with a PostgreSQL deployment outside Neon. Hermit itself is a small Go process that connects to one configured PostgreSQL endpoint; HAProxy terminates public TLS in the supplied deployment example. An optional OIDC access-token gate can protect both entrances. For end-to-end OAuth on HTTP, PostgreSQL must also support OAuth authentication and have a validator and role mapping configured; the gate alone does not grant database access. See [Authentication](#authentication-who-checks-what) for the transport-specific details.
+Hermit implements a subset of the interface used by the Neon serverless driver, so applications can use that driver with a PostgreSQL deployment outside Neon. Hermit is a small Go process that connects to a fixed upstream by default, with optional allowlisted routing; HAProxy terminates public TLS in the supplied deployment example. An optional OIDC access-token gate can protect both entrances. For end-to-end OAuth on HTTP, PostgreSQL must also support OAuth authentication and have a validator and role mapping configured; the gate alone does not grant database access. See [Authentication](#authentication-who-checks-what) for the transport-specific details.
 
 Hermit is licensed under [Apache-2.0](LICENSE). See the
 [third-party license inventory](THIRD-PARTY-NOTICES.md) for bundled Go code,
@@ -15,7 +15,7 @@ neon() / sql.query()   ─── POST /sql ───►  HTTP query handler ─�
 Client / Pool          ─── WS /v2 ─────►  binary wire tunnel ─── TCP ───►  :5432
 ```
 
-Hermit is inspired by [Neon's wsproxy](https://github.com/neondatabase/wsproxy). It is a **compatible subset**, not a drop-in replacement for Neon's full proxy or its platform routing. [todo.md](todo.md) lists the precise gaps found against the published serverless driver and Neon proxy source.
+Hermit is inspired by [Neon's wsproxy](https://github.com/neondatabase/wsproxy). It is a **compatible subset**, not a drop-in replacement for Neon's full proxy or its platform routing. [todo.md](todo.md) lists the precise gaps found against the published serverless driver and Neon proxy source. See [deployment modes](docs/deployment.md) for direct PostgreSQL, PgBouncer, and approved multi-target routing.
 
 ## Start here
 
@@ -120,23 +120,24 @@ Streaming lets Hermit avoid holding a whole result, while the Neon driver's `neo
 
 ## Deploy near PostgreSQL
 
-Set `HERMIT_PG_ADDR` to the nearby server and keep the Hermit listener private. The repository includes an optional [HAProxy deployment example](haproxy.cfg) for public TLS, with WebSocket-friendly timeouts and a health check. Its `option abortonclose` forwards client aborts promptly so Hermit can cancel HTTP queries. HAProxy should set `X-Forwarded-Proto: https` when serving the console through TLS.
+Set `HERMIT_PG_ADDR` to a private PostgreSQL or PgBouncer address. It may be a container service name such as `postgres:5432` or `pgbouncer:6432`; it need not be `localhost`. With `HERMIT_PG_ALLOWED_ADDRS` empty, this is the only upstream Hermit connects to, regardless of the address supplied by the client. A nearby PgBouncer can reuse backend connections for HTTP requests; choose its pool mode for the workload. The [deployment guide](docs/deployment.md) covers direct, pooled, and dual-route configurations, network boundaries, TLS on both PgBouncer legs, and checks before serving customers. The [connection-cost measurements](benchmarks.md#http-connection-reuse-decision) were taken without PgBouncer.
 
-`HERMIT_PG_ADDR` can also point to a nearby [PgBouncer](https://www.pgbouncer.org/usage) listener. Hermit still opens a client connection for each HTTP request, while PgBouncer can reuse its PostgreSQL server connections. This is a reasonable way to control database backend counts without adding a pool inside Hermit. PgBouncer's transaction mode needs a workload compatible with transaction pooling; use session mode for clients that depend on session state. PgBouncer performs its own client authentication, so the PostgreSQL 18 OAuth/OAUTHBEARER path documented below has only been tested with Hermit connected directly to PostgreSQL. Validate that auth path separately before putting PgBouncer in it. The [connection-cost measurements](benchmarks.md#http-connection-reuse-decision) were also taken without PgBouncer.
+Keep Hermit's listener private behind an HTTPS/WSS ingress. The repository includes an optional [HAProxy deployment example](haproxy.cfg) with WebSocket-friendly timeouts and a health check. Its `option abortonclose` forwards client aborts promptly so Hermit can cancel HTTP queries. HAProxy should set `X-Forwarded-Proto: https` when serving the console through TLS.
 
-### Route to more than one PostgreSQL address
+### Select a direct or pooled route
 
-Set `HERMIT_PG_ALLOWED_ADDRS` to an exact, comma-separated list of destinations, such as `db-a.internal:5432,db-b.internal:5432`. This enables request-based routing. HTTP takes the host and port from `Neon-Connection-String` (port 5432 when omitted); WebSocket takes `?address=host:port`, which the Neon driver adds when `neonConfig.wsProxy` is a string. Only listed addresses are accepted. A request for any other address fails; Hermit never silently sends it to the default database.
+Set `HERMIT_PG_ALLOWED_ADDRS` to an exact, comma-separated list of destinations. PostgreSQL and PgBouncer may run on the same host, with PostgreSQL on `127.0.0.1:5432` and PgBouncer on `127.0.0.1:6432`; Hermit can connect to either port. In separate containers, use `postgres:5432,pgbouncer:6432` instead. HTTP takes the host and port from `Neon-Connection-String` (port 5432 when omitted); WebSocket takes `?address=host:port`, which the Neon driver adds when `neonConfig.wsProxy` is a string. Only listed addresses are accepted. A request for any other address fails.
 
-`HERMIT_PG_ADDR` becomes an optional fallback for requests without an address. If it is unset, such requests fail. The fallback is configured by the operator and does not need to appear in the allowlist. The shipped Compose configuration keeps fixed routing for the simple one-database setup.
+`HERMIT_PG_ADDR` becomes an optional fallback for requests without an address. If it is unset, such requests fail. If set, it must also appear in the allowlist; Hermit refuses to start otherwise. The shipped Compose configuration keeps fixed routing for the simple one-database setup. An allowlist permits any authorized caller to choose any listed route, so use separate fixed-upstream Hermit instances if direct and pooled routes have different access policies.
 
 ```sh
-HERMIT_PG_ALLOWED_ADDRS='db-a.internal:5432,db-b.internal:5432' \
+HERMIT_PG_ALLOWED_ADDRS='127.0.0.1:5432,127.0.0.1:6432' \
+HERMIT_PG_ADDR='127.0.0.1:6432' \
 HERMIT_PG_SSLMODE=require \
 ./hermit
 ```
 
-For both transports, direct the driver to Hermit while retaining each database's own host in its connection string:
+This makes PgBouncer the fallback and allows clients to select the direct path. With `HERMIT_PG_SSLMODE=require`, both local servers need trusted certificates covering `127.0.0.1` as an IP address; set `HERMIT_PG_CA_FILE` if they use a private CA. For both transports, direct the driver to Hermit while retaining the desired upstream host and port in its connection string:
 
 ```js
 neonConfig.fetchEndpoint = 'https://hermit.example.com/sql';
@@ -148,7 +149,7 @@ Allow only database addresses you control. Hermit resolves the listed hostnames 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `HERMIT_LISTEN` | `:8080` | HTTP and WebSocket listen address |
-| `HERMIT_PG_ADDR` | `127.0.0.1:5432` in fixed mode; unset in routing mode | Fixed destination, or optional fallback when allowlisting is enabled |
+| `HERMIT_PG_ADDR` | `127.0.0.1:5432` in fixed mode; unset in routing mode | Fixed destination, or optional allowlisted fallback when routing is enabled |
 | `HERMIT_PG_ALLOWED_ADDRS` | empty | Enable request-based routing to these exact `host:port` destinations |
 | `HERMIT_PG_USER` | `postgres` | Default user for bearer HTTP requests |
 | `HERMIT_PG_DATABASE` | `postgres` | Default database for bearer HTTP requests |

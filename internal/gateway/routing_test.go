@@ -52,13 +52,16 @@ func TestPostgreSQLRoutingFallbackAndFixedMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, cfg := range []Config{
-		{PGAddr: "default.internal:5432", PGAllowedAddrs: allowed},
+		{PGAddr: "db.internal:5432", PGAllowedAddrs: allowed},
 		{PGAddr: "default.internal:5432"},
 	} {
 		addr, err := cfg.UpstreamAddr("")
-		if err != nil || addr != "default.internal:5432" {
+		if err != nil || addr != cfg.PGAddr {
 			t.Fatalf("fallback = %q, %v", addr, err)
 		}
+	}
+	if addr, err := (Config{PGAddr: "default.internal:5432", PGAllowedAddrs: allowed}).UpstreamAddr(""); err == nil {
+		t.Fatalf("accepted unlisted fallback %q", addr)
 	}
 	fixed := Config{PGAddr: "default.internal:5432"}
 	addr, err := fixed.UpstreamAddr("malicious.internal:5432")

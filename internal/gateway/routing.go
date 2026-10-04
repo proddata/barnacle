@@ -48,7 +48,10 @@ func (c Config) UpstreamAddr(requested string) (string, error) {
 	}
 	if requested == "" {
 		if c.PGAddr != "" {
-			return c.PGAddr, nil
+			if _, ok := c.PGAllowedAddrs[c.PGAddr]; ok {
+				return c.PGAddr, nil
+			}
+			return "", errors.New("default PostgreSQL address not allowed")
 		}
 		return "", errors.New("PostgreSQL address required")
 	}

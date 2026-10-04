@@ -90,6 +90,12 @@ func main() {
 			slog.Error("invalid HERMIT_PG_ADDR", "error", err)
 			os.Exit(1)
 		}
+		if len(allowedAddrs) > 0 {
+			if _, ok := allowedAddrs[defaultPGAddr]; !ok {
+				slog.Error("HERMIT_PG_ADDR must appear in HERMIT_PG_ALLOWED_ADDRS when routing is enabled")
+				os.Exit(1)
+			}
+		}
 	}
 	readyPGAddr := os.Getenv("HERMIT_READY_PG_ADDR")
 	if readyPGAddr != "" {
