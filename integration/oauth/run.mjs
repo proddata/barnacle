@@ -137,6 +137,8 @@ try {
   const passwordFallback = await post(valid, 'postgres://fallbackuser@localhost/hermit');
   assert.equal(passwordFallback.status, 502,
     `OIDC request fell back to PostgreSQL password authentication: ${JSON.stringify(passwordFallback)}`);
+  assert.equal(passwordFallback.body.code, 'HERMIT_UPSTREAM_OAUTH_UNAVAILABLE',
+    `unexpected response when PostgreSQL does not offer OAuth: ${JSON.stringify(passwordFallback)}`);
   assert.equal((await post(valid)).status, 200, 'valid token failed after rejection cases');
   process.stdout.write('OAuth end-to-end: valid access token accepted; bad signature, audience, scope, role, and password fallback rejected.\n');
 } catch (error) {

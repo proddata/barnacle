@@ -207,7 +207,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	conn, err := pgx.ConnectConfig(ctx, pgcfg)
 	if err != nil {
 		c.Metrics.UpstreamFailure()
-		dbError(w, err)
+		dbConnectError(w, err, pgcfg.RequireAuth == "oauth" && pgcfg.OAuthTokenProvider != nil)
 		return
 	}
 	defer conn.Close(context.Background())
@@ -433,6 +433,23 @@ func fieldsFromDescriptions(descriptions []pgconn.FieldDescription) []field {
 		fields[i] = field{Name: d.Name, TableID: d.TableOID, ColumnID: d.TableAttributeNumber, DataTypeID: d.DataTypeOID, DataTypeSize: d.DataTypeSize, DataTypeModifier: d.TypeModifier, Format: "text"}
 	}
 	return fields
+}
+
+func dbConnectError(w http.ResponseWriter, err error, requireOAuth bool) {
+	// pgx rejects a password, SCRAM, or trust-only server before sending any
+	// credentials when require_auth=oauth. Distinguish that upstream capability
+	// mismatch from an invalid bearer token or a transient connection failure.
+	var connectErr *pgconn.ConnectError
+	var pgerr *pgconn.PgError
+	if requireOAuth && errors.As(err, &connectErr) && !errors.As(err, &pgerr) &&
+		strings.Contains(connectErr.Error(), `authentication method requirement "oauth" failed:`) {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"message": "upstream PostgreSQL does not offer OAuth authentication for this connection",
+			"code":    "HERMIT_UPSTREAM_OAUTH_UNAVAILABLE",
+		})
+		return
+	}
+	dbError(w, err)
 }
 
 func dbError(w http.ResponseWriter, err error) {
