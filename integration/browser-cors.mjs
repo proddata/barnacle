@@ -98,7 +98,13 @@ async function browserResult(port) {
     '--headless=new', '--no-first-run', '--disable-gpu',
     '--remote-allow-origins=*', '--remote-debugging-port=0',
     `--user-data-dir=${profile}`, 'about:blank',
-  ], { stdio: 'ignore' });
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let startupError;
+  let exitStatus;
+  let stderr = '';
+  browser.on('error', (error) => { startupError = error; });
+  browser.on('exit', (code, signal) => { exitStatus = { code, signal }; });
+  browser.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-8192); });
   let socket;
   try {
     let debugPort;
@@ -108,7 +114,7 @@ async function browserResult(port) {
         break;
       } catch { await delay(100); }
     }
-    assert.ok(debugPort, 'Chrome debugging port did not start');
+    assert.ok(debugPort, `Chrome debugging port did not start (exit: ${JSON.stringify(exitStatus)}, error: ${startupError?.message ?? 'none'}, stderr: ${stderr || 'empty'})`);
     const pages = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json();
     socket = new WebSocket(pages.find((page) => page.type === 'page').webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
