@@ -14,6 +14,37 @@ neonConfig.wsProxy = () => `${endpoint.host}/v2`;
 neonConfig.pipelineConnect = false; // The release fixture uses SCRAM.
 neonConfig.forceDisablePgSSL = true;
 
+if (process.env.HERMIT_SMOKE_UNREACHABLE === '1') {
+  const response = await fetch(`${base}/sql`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Neon-Connection-String': databaseUrl },
+    body: JSON.stringify({ query: 'select 1', params: [] }),
+    signal: AbortSignal.timeout(5000),
+  });
+  assert.equal(response.status, 502, 'HTTP should report an unavailable upstream');
+  assert.equal((await response.json()).message, 'postgres connection or query failed');
+
+  await new Promise((resolve, reject) => {
+    const socket = new WebSocket(`${endpoint.protocol === 'https:' ? 'wss:' : 'ws:'}//${endpoint.host}/v2`);
+    const timeout = setTimeout(() => reject(new Error('WebSocket upstream failure timed out')), 5000);
+    const finish = (error) => {
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve();
+    };
+    socket.on('open', () => finish(new Error('WebSocket connected to an unavailable upstream')));
+    socket.on('error', finish);
+    socket.on('unexpected-response', (_, upstreamResponse) => {
+      upstreamResponse.destroy();
+      try {
+        assert.equal(upstreamResponse.statusCode, 502, 'WebSocket upgrade should report an unavailable upstream');
+        finish();
+      } catch (error) { finish(error); }
+    });
+  });
+  assert.equal((await fetch(`${base}/healthz`)).status, 200, 'Hermit should remain alive');
+  console.log('Release artifact: unavailable PostgreSQL fails cleanly over HTTP and WebSocket');
+} else {
 const sql = neon(databaseUrl);
 const rows = await sql`select 42::int as answer, current_user as username`;
 assert.deepEqual(rows[0], { answer: 42, username: new URL(databaseUrl).username });
@@ -34,4 +65,12 @@ try {
   await client.end();
 }
 
-console.log('Release artifact: HTTP query, HTTP batch, and WebSocket query passed');
+const wrongPassword = new URL(databaseUrl);
+wrongPassword.password = 'incorrect-password';
+await assert.rejects(neon(wrongPassword.toString()).query('select 1'), (error) => error.code === '28P01');
+const rejectedClient = new Client(wrongPassword.toString());
+await assert.rejects(rejectedClient.connect(), (error) => error.code === '28P01');
+assert.equal((await fetch(`${base}/healthz`)).status, 200, 'Hermit should remain alive');
+
+console.log('Release artifact: HTTP query, batch, WebSocket query, and rejected credentials passed');
+}
