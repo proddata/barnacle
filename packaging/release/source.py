@@ -24,7 +24,7 @@ if os.environ.get("RELEASE_VERSION", VERSION) != VERSION:
 
 try:
     timestamp = int(os.environ.get("SOURCE_DATE_EPOCH") or subprocess.check_output(
-        ["git", "log", "-1", "--format=%ct", "HEAD"], cwd=ROOT, text=True
+        ["git", "-c", f"safe.directory={ROOT}", "log", "-1", "--format=%ct", "HEAD"], cwd=ROOT, text=True
     ).strip())
 except (OSError, subprocess.CalledProcessError, ValueError) as error:
     raise SystemExit("set SOURCE_DATE_EPOCH or build from a Git checkout") from error
