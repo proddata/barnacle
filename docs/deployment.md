@@ -159,6 +159,7 @@ If another API proxy sits before HAProxy and terminates TLS, that proxy must dis
 | `HERMIT_PG_EXTRA_CA_FILE` | empty | Second optional PEM CA bundle, useful for a provider CA alongside the local Compose CA |
 | `HERMIT_QUERY_TIMEOUT` | `30s` | HTTP connection and query deadline |
 | `HERMIT_HTTP_READ_TIMEOUT` | `15s` | Maximum time to read an HTTP request, including its body; the WebSocket handshake is subject to this until upgrade |
+| `HERMIT_HTTP_WRITE_TIMEOUT` | `60s` | Maximum time from reading an HTTP request's headers through writing its response; bounds slow HTTP readers without limiting an upgraded WebSocket session |
 | `HERMIT_HTTP_IDLE_TIMEOUT` | `60s` | Maximum idle time between HTTP keep-alive requests; upgraded WebSockets use `HERMIT_WS_IDLE_TIMEOUT` instead |
 | `HERMIT_READY_PG_ADDR` | empty | Optional `host:port` probe for `/readyz`; checks TCP and configured PostgreSQL TLS, without authentication |
 | `HERMIT_METRICS` | `false` | Expose `GET /metrics` on the main listener; keep it private |
@@ -175,6 +176,8 @@ If another API proxy sits before HAProxy and terminates TLS, that proxy must dis
 | `HERMIT_TRUSTED_PROXIES` | empty | Comma-separated literal IPs or CIDR prefixes of immediate reverse proxies allowed to assert `X-Forwarded-Proto`; `0.0.0.0/0` and `::/0` are rejected |
 
 A WebSocket query that produces no output for longer than `HERMIT_WS_IDLE_TIMEOUT` will be disconnected. Raise that setting for longer quiet queries; PostgreSQL's own `statement_timeout` remains the query-duration limit.
+
+`HERMIT_HTTP_WRITE_TIMEOUT` is an absolute deadline for an HTTP request, including query execution and streamed output. Its 60-second default leaves time after the 30-second query deadline for a client to receive the result. Raise it for legitimate large or slow transfers, but keep it bounded so a client that stops reading cannot hold a query slot indefinitely. WebSocket sessions use their own idle and per-write deadlines after upgrade.
 
 `/healthz` checks that Hermit is running. `/readyz` returns 200 when ready; set `HERMIT_READY_PG_ADDR` to enable a PostgreSQL transport probe, which returns 503 if the address cannot be reached or its TLS certificate fails verification. The probe does not log in or run SQL. `/metrics` is disabled by default. When enabled, it serves Prometheus text format with active WebSockets, SQL request and HTTP error counts, a SQL duration histogram, connection-limit rejections, and failed upstream connections. A failed upstream connection includes network, TLS, and PostgreSQL authentication failures. These metrics contain no query text or credentials. Restrict access to `/metrics` at your ingress if the main listener is exposed. An OpenTelemetry Collector can scrape this endpoint with its Prometheus receiver; Hermit does not currently emit OTLP or traces itself.
 
