@@ -35,6 +35,11 @@ func main() {
 		slog.Error("invalid HERMIT_HTTP_READ_TIMEOUT")
 		os.Exit(1)
 	}
+	httpWriteTimeout, err := time.ParseDuration(env("HERMIT_HTTP_WRITE_TIMEOUT", "60s"))
+	if err != nil || httpWriteTimeout <= 0 {
+		slog.Error("invalid HERMIT_HTTP_WRITE_TIMEOUT")
+		os.Exit(1)
+	}
 	httpIdleTimeout, err := time.ParseDuration(env("HERMIT_HTTP_IDLE_TIMEOUT", "60s"))
 	if err != nil || httpIdleTimeout <= 0 {
 		slog.Error("invalid HERMIT_HTTP_IDLE_TIMEOUT")
@@ -184,6 +189,7 @@ func main() {
 		Addr: cfg.Listen, Handler: mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
 		IdleTimeout:       httpIdleTimeout,
 		MaxHeaderBytes:    32 << 10,
 	}
