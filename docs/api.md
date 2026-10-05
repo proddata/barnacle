@@ -30,9 +30,9 @@ Send one JSON object with either `query` or `queries`. There are no Hermit-speci
 | `Neon-Batch-Isolation-Level` | Batch isolation: `ReadUncommitted`, `ReadCommitted` (default), `RepeatableRead`, or `Serializable`; case and spaces are ignored. Invalid values return `400`. |
 | `Neon-Batch-Deferrable: true` | Request a deferrable batch transaction; PostgreSQL decides whether the selected transaction options are valid. |
 | `Accept-Encoding: gzip` | Allow gzip for JSON responses of at least 1 KiB. Smaller responses remain uncompressed. |
-| `Origin` | Browser origin. Same-origin requests and the exact configured `HERMIT_ALLOWED_ORIGIN` are allowed; other origins return `403`. |
+| `Origin` | Browser origin. Same-origin requests and exact entries in `HERMIT_ALLOWED_ORIGIN` are allowed; other origins return `403`. |
 
-When an ingress terminates HTTPS, it should set `X-Forwarded-Proto: https` on requests to Hermit so same-origin checks use the external scheme. Accept that header only from a trusted ingress.
+When an ingress terminates HTTPS, it should replace any client-supplied `X-Forwarded-Proto` with a single verified scheme and preserve the public `Host`. Set `HERMIT_TRUSTED_PROXIES` to the ingress's immediate source IP or narrow CIDR so same-origin checks use that scheme. Hermit ignores the header from other peers and rejects duplicate, comma-separated, or invalid values from trusted peers during Origin checks.
 
 ### JSON body fields
 
@@ -127,14 +127,16 @@ Content-Type: application/json
 
 | Status | Typical cause | Response |
 | --- | --- | --- |
-| `400` | Malformed JSON or request shape, body above 1 MiB, missing credentials, invalid routing or batch options | Hermit JSON error. PostgreSQL errors also use `400`, but their `code` is the SQLSTATE (for example `22012` for division by zero or `28P01` for a rejected password). |
+| `400` | Malformed JSON or request shape, missing credentials, invalid routing or batch options | Hermit JSON error. PostgreSQL errors also use `400`, but their `code` is the SQLSTATE (for example `22012` for division by zero or `28P01` for a rejected password). |
 | `401` | Invalid or missing access token with the OIDC gate, or PostgreSQL OAuth token rejection | JSON error; `WWW-Authenticate: Bearer error="invalid_token"`. |
 | `403` | Disallowed browser `Origin` | Plain-text `origin denied`. |
-| `413` | PostgreSQL row, buffered result, or response exceeds a configured size limit, when detected before response headers are sent | JSON error. |
+| `413` | HTTP request body above 1 MiB, or PostgreSQL row, buffered result, or response exceeds a configured size limit when detected before response headers are sent | JSON error. |
 | `502` | PostgreSQL connection, TLS, or query transport failure; upstream lacks required OAuth support | JSON error. OAuth capability mismatch uses `code: "HERMIT_UPSTREAM_OAUTH_UNAVAILABLE"`. |
 | `503` | HTTP query or upstream connection limit reached | JSON error. |
 
 Unknown paths return `404`; an unsupported method on a known path returns `405`. PostgreSQL errors include `message`, SQLSTATE `code`, `severity`, and nullable details such as `detail`, `hint`, `position`, `schema`, `table`, `column`, and `constraint`. A malformed HTTP request never reaches PostgreSQL. A client abort cancels its running HTTP query. If a streamed response fails after headers were sent, Hermit cannot change its `200` status; the client receives incomplete JSON.
+
+The published Neon driver parses error JSON and copies SQLSTATE fields into `NeonDbError` only for HTTP `400`. For other non-OK statuses, it puts the status and raw response text in the error message. See the [Neon error-parity decision](decisions/neon-error-parity.md) for the case-by-case comparison.
 
 ## `GET /v2` and `GET /v1`: PostgreSQL over WebSocket
 
@@ -148,6 +150,8 @@ Both paths accept a standard WebSocket upgrade and relay **binary PostgreSQL wir
 | `Cookie: hermit_access_token=<token>` | Required on the upgrade when Hermit's OIDC gate is enabled. Hermit verifies the token; the WebSocket client still performs PostgreSQL wire authentication after upgrade. Hermit does not issue this cookie. |
 
 For example, `GET /v2?address=pgbouncer:6432` selects that allowlisted route. On success the server replies `101 Switching Protocols` with `Upgrade: websocket`, `Connection: Upgrade`, and `Sec-WebSocket-Accept`; the first application data is then PostgreSQL wire traffic, not JSON. Before upgrade, invalid handshake or routing returns `400`, missing/invalid cookie returns `401`, a full connection limit or server shutdown returns `503`, and an unreachable PostgreSQL target returns `502`. These failures are plain-text HTTP responses. PostgreSQL CancelRequest packets are relayed across WebSocket connections. A disconnected client releases its upstream session and Hermit attempts to cancel work still running there. WebSocket idle and write timeouts are configurable; see [deployment](deployment.md).
+
+The published Neon `Client` and `Pool` retain PostgreSQL session state across WebSocket queries, including transactions, `SET`, named prepared statements, cursors, and `LISTEN`/`NOTIFY`. A `Pool` checkout can inherit state left by an earlier checkout on the same connection; callers should reset session settings before release when they need isolation. The published `Client.query()` API does not provide a COPY stream: `COPY FROM STDIN` fails with `No source stream defined`, and its query handler discards `COPY TO STDOUT` data. Use a PostgreSQL client with COPY streaming support for those operations; Hermit's `/v2` transport relays the wire messages unchanged.
 
 ## CORS preflight and operational endpoints
 

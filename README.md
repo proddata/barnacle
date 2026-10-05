@@ -2,11 +2,31 @@
 
 Hermit is an HTTP and WebSocket gateway for PostgreSQL. It brings serverless and agent-driven applications to self-hosted or managed PostgreSQL using a subset of the Neon serverless driver interface. Hermit connects to a fixed database or pooler by default; optional routing is limited to addresses you allow.
 
-```text
-@neondatabase/serverless       Hermit                    PostgreSQL
-neon() / sql.query()  ─ HTTP ──► POST /sql ── pgx ────────► :5432
-Client / Pool         ── WS ───► GET /v2 ── wire tunnel ──► :5432
+```mermaid
+flowchart LR
+    subgraph App[Application]
+        HTTPClient["neon() / sql.query()"]
+        WSClient["Client / Pool"]
+    end
+
+    subgraph Gateway[Hermit]
+        HTTP["POST /sql<br/>HTTP query or transaction batch"]
+        PGX["pgx<br/>PostgreSQL wire client"]
+        WS["GET /v2<br/>WebSocket session"]
+        Relay["PostgreSQL wire relay"]
+        HTTP --> PGX
+        WS --> Relay
+    end
+
+    Upstream["PostgreSQL or PgBouncer"]
+    HTTPClient -->|HTTP JSON| HTTP
+    WSClient -->|PostgreSQL wire over WebSocket| WS
+    PGX -->|PostgreSQL wire protocol| Upstream
+    Relay -->|PostgreSQL wire protocol| Upstream
 ```
+
+> [!NOTE]
+> **Why Hermit?** A hermit crab finds a new shell without changing who lives inside. Hermit gives PostgreSQL an HTTP or WebSocket shell, while its familiar wire protocol carries on underneath. 🦀
 
 Hermit is [Apache-2.0 licensed](LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md). It is a [compatible subset](todo.md) of Neon's interface, not Neon's full proxy or platform routing.
 
@@ -32,7 +52,7 @@ postgres://hermit:hermit_dev_password@localhost:5432/hermit
 
 The Compose stack is for local development: it binds Hermit to loopback, keeps PostgreSQL off the host network, and verifies a generated PostgreSQL certificate. The example password is not for production.
 
-The console's host field can select another PostgreSQL or PgBouncer address only when that address appears in `HERMIT_PG_ALLOWED_ADDRS`. In fixed mode, Hermit always connects to `HERMIT_PG_ADDR` regardless of the host shown in the console. The console container proxies HTTP and WebSocket requests to Hermit on the same browser origin; it is an optional debugging artifact, not part of the Hermit binary.
+The local Compose stack allows the console's host field to select any PostgreSQL `host:port`, including external services. Hermit still verifies upstream TLS using the host name and the system trust store plus the generated local CA. Use the provider's PostgreSQL host and port, database, user, and password in the console. For services with private CAs, see the [console setup instructions](console/README.md). Set `HERMIT_PG_ALLOWED_ADDRS` to exact addresses to restrict destinations, or set it to an empty string to use only `HERMIT_PG_ADDR`. The console container proxies HTTP and WebSocket requests to Hermit on the same browser origin; it is an optional debugging artifact, not part of the Hermit binary.
 
 Try SQL over HTTP:
 

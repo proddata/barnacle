@@ -63,6 +63,8 @@ const mockPostgres = createTCPServer((socket) => {
 const mockPort = await listen(mockPostgres);
 const allowedPage = createHTTPServer();
 const allowedPort = await listen(allowedPage);
+const secondAllowedPage = createHTTPServer();
+const secondAllowedPort = await listen(secondAllowedPage);
 const deniedPage = createHTTPServer();
 const deniedPort = await listen(deniedPage);
 const endpoint = createTCPServer();
@@ -70,6 +72,10 @@ const hermitPort = await listen(endpoint);
 await close(endpoint);
 const target = `http://127.0.0.1:${hermitPort}`;
 allowedPage.on('request', (_, response) => {
+  response.setHeader('Content-Type', 'text/html; charset=utf-8');
+  response.end(page(target));
+});
+secondAllowedPage.on('request', (_, response) => {
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
   response.end(page(target));
 });
@@ -83,7 +89,7 @@ const child = spawn(binary, [], {
     HERMIT_LISTEN: `127.0.0.1:${hermitPort}`,
     HERMIT_PG_ADDR: `127.0.0.1:${mockPort}`,
     HERMIT_PG_SSLMODE: 'disable',
-    HERMIT_ALLOWED_ORIGIN: `http://127.0.0.1:${allowedPort}`,
+    HERMIT_ALLOWED_ORIGIN: `http://127.0.0.1:${allowedPort}, http://127.0.0.1:${secondAllowedPort}`,
     HERMIT_OIDC_ISSUER: '',
     HERMIT_OIDC_AUDIENCE: '',
   },
@@ -170,14 +176,16 @@ try {
 
   for (const [port, expected] of [
     [allowedPort, 'http:400 ws:open'],
+    [secondAllowedPort, 'http:400 ws:open'],
     [deniedPort, 'http:blocked ws:blocked'],
   ]) {
     assert.equal(await browserResult(port), expected, `browser result from port ${port}`);
   }
-  console.log('Chrome enforced HTTP CORS and WebSocket Origin for allowed and denied origins');
+  console.log('Chrome enforced HTTP CORS and WebSocket Origin for both allowed origins and a denied origin');
 } finally {
   child.kill('SIGTERM');
   await close(allowedPage);
+  await close(secondAllowedPage);
   await close(deniedPage);
   for (const socket of mockSockets) socket.destroy();
   await close(mockPostgres);

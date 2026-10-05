@@ -47,6 +47,7 @@ wait_health() {
 
 wait_health 8080
 docker exec "$container" sh -c '
+    set -eu
     test "$(systemctl show -P Restart hermit)" = on-failure
     test "$(systemctl show -P MemoryHigh hermit)" = 201326592
     test "$(systemctl show -P MemoryMax hermit)" = 268435456
@@ -80,6 +81,56 @@ docker exec "$container" sed -i 's/127.0.0.1:18080/127.0.0.1:8080/' /etc/sysconf
 docker exec "$container" systemctl restart hermit
 wait_health 8080
 
+# The packaged fixed-user drop-in is opt-in. Verify a group-restricted key.
+docker exec "$container" systemctl stop hermit
+docker exec "$container" sh -c '
+    set -eu
+    groupadd --system hermit
+    groupadd --system hermit-service-keys
+    useradd --system --gid hermit --home-dir /nonexistent --shell /sbin/nologin hermit
+    install -d -m 0750 -o root -g hermit-service-keys /run/hermit/service-keys
+    install -d -m 0755 /etc/pki/hermit /etc/systemd/system/hermit.service.d
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+        -subj /CN=hermit-fedora-service-test \
+        -keyout /run/hermit/service-keys/client.key \
+        -out /etc/pki/hermit/ca.pem >/dev/null 2>&1
+    chown root:hermit-service-keys /run/hermit/service-keys/client.key
+    chmod 0640 /run/hermit/service-keys/client.key
+    ! runuser -u hermit -g hermit -- test -r /run/hermit/service-keys/client.key
+    cp /usr/share/hermit/hermit-key-access.conf /etc/systemd/system/hermit.service.d/key-access.conf
+    cat > /etc/systemd/system/hermit.service.d/99-key-check.conf <<EOF
+[Service]
+ExecStartPre=/usr/bin/test -r /run/hermit/service-keys/client.key
+EOF
+    printf "\nHERMIT_PG_CA_FILE=/etc/pki/hermit/ca.pem\n" >> /etc/sysconfig/hermit
+    systemctl daemon-reload
+    systemd-analyze verify hermit.service
+    systemctl restart hermit
+'
+wait_health 8080
+docker exec "$container" sh -c '
+    set -eu
+    test "$(systemctl show -P DynamicUser hermit)" = no
+    test "$(systemctl show -P User hermit)" = hermit
+    test "$(systemctl show -P Group hermit)" = hermit
+    test "$(systemctl show -P SupplementaryGroups hermit)" = hermit-service-keys
+    case "$(systemctl show -P ReadOnlyPaths hermit)" in
+        *"/run/hermit/service-keys"*) ;;
+        *) exit 1 ;;
+    esac
+    case "$(systemctl show -P ReadOnlyPaths hermit)" in
+        *"/etc/pki/hermit"*) ;;
+        *) exit 1 ;;
+    esac
+    test "$(systemctl show -P NoNewPrivileges hermit)" = yes
+    test "$(systemctl show -P PrivateTmp hermit)" = yes
+    test "$(systemctl show -P ProtectHome hermit)" = yes
+    test "$(systemctl show -P ProtectSystem hermit)" = strict
+    test "$(systemctl show -P MemoryHigh hermit)" = 201326592
+    test "$(systemctl show -P MemoryMax hermit)" = 268435456
+    test "$(systemctl show -P MemorySwapMax hermit)" = 0
+'
+
 docker exec "$container" systemctl stop hermit
 docker exec "$container" sh -c 'test "$(systemctl is-active hermit)" = inactive'
 if docker exec "$container" curl --silent --fail --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
@@ -87,4 +138,4 @@ if docker exec "$container" curl --silent --fail --max-time 2 http://127.0.0.1:8
     exit 1
 fi
 
-echo 'Fedora RPM: systemd startup, memory policy, crash restart, config reload, and stop passed'
+echo 'Fedora RPM: systemd startup, memory policy, crash restart, config reload, restricted key access, and stop passed'

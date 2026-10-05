@@ -77,3 +77,33 @@ func TestPostgreSQLRoutingFallbackAndFixedMode(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgreSQLRoutingWildcard(t *testing.T) {
+	allowed, err := ParseAllowedPGAddrs("*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{PGAddr: "postgres:5432", PGAllowedAddrs: allowed}
+	for _, tc := range []struct{ requested, want string }{
+		{"", "postgres:5432"},
+		{"external.example:26432", "external.example:26432"},
+		{"EXTERNAL.EXAMPLE:26432", "external.example:26432"},
+	} {
+		got, err := cfg.UpstreamAddr(tc.requested)
+		if err != nil || got != tc.want {
+			t.Fatalf("UpstreamAddr(%q) = %q, %v; want %q", tc.requested, got, err, tc.want)
+		}
+	}
+	got, err := cfg.HTTPUpstreamAddr("postgres://user:password@external.example:26432/db")
+	if err != nil || got != "external.example:26432" {
+		t.Fatalf("HTTPUpstreamAddr = %q, %v", got, err)
+	}
+	for _, invalid := range []string{"*", "external.example", "external.example:0"} {
+		if _, err := cfg.UpstreamAddr(invalid); err == nil {
+			t.Fatalf("accepted invalid address %q", invalid)
+		}
+	}
+	if _, err := ParseAllowedPGAddrs("postgres:5432,*"); err == nil {
+		t.Fatal("accepted wildcard mixed with an address")
+	}
+}

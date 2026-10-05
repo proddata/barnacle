@@ -31,8 +31,14 @@ func ParseAllowedPGAddrs(raw string) (map[string]struct{}, error) {
 	if raw == "" {
 		return nil, nil
 	}
+	if strings.TrimSpace(raw) == "*" {
+		return map[string]struct{}{"*": {}}, nil
+	}
 	allowed := make(map[string]struct{})
 	for _, entry := range strings.Split(raw, ",") {
+		if strings.TrimSpace(entry) == "*" {
+			return nil, errors.New("HERMIT_PG_ALLOWED_ADDRS must use * alone")
+		}
 		addr, err := CanonicalPGAddr(strings.TrimSpace(entry))
 		if err != nil {
 			return nil, fmt.Errorf("invalid HERMIT_PG_ALLOWED_ADDRS entry %q: %w", entry, err)
@@ -46,9 +52,10 @@ func (c Config) UpstreamAddr(requested string) (string, error) {
 	if len(c.PGAllowedAddrs) == 0 {
 		return c.PGAddr, nil
 	}
+	_, allowAny := c.PGAllowedAddrs["*"]
 	if requested == "" {
 		if c.PGAddr != "" {
-			if _, ok := c.PGAllowedAddrs[c.PGAddr]; ok {
+			if _, ok := c.PGAllowedAddrs[c.PGAddr]; ok || allowAny {
 				return c.PGAddr, nil
 			}
 			return "", errors.New("default PostgreSQL address not allowed")
@@ -58,6 +65,9 @@ func (c Config) UpstreamAddr(requested string) (string, error) {
 	addr, err := CanonicalPGAddr(requested)
 	if err != nil {
 		return "", err
+	}
+	if allowAny {
+		return addr, nil
 	}
 	if _, ok := c.PGAllowedAddrs[addr]; !ok {
 		return "", errors.New("PostgreSQL address not allowed")

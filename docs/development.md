@@ -2,6 +2,19 @@
 
 Run commands in this guide from the repository root.
 
+## Tagged releases
+
+The [release workflow](../.github/workflows/release.yml) runs only when a `vX.Y.Z` tag is pushed; branch pushes build CI candidates but do not publish a release. Update `Version:` in [the RPM spec](../packaging/rpm/hermit.spec) to `X.Y.Z`, merge and verify CI, then create and push an annotated tag on that commit:
+
+```sh
+git tag -a vX.Y.Z -m 'Hermit vX.Y.Z'
+git push origin vX.Y.Z
+```
+
+The workflow checks that the tag matches the spec version. It creates deterministic `hermit-X.Y.Z.tar.gz` and `hermit-X.Y.Z-vendor.tar.gz` archives, then builds static Linux amd64/arm64 binaries, both Debian packages, both Fedora RPMs from those exact source archives, and a multi-platform OCI archive with SBOM and provenance attestations. After all jobs succeed, it writes and verifies `SHA256SUMS` over the nine artifacts and publishes them together as GitHub Release assets. The source archive contains the Go service, RPM packaging files, and licenses; it excludes the optional console. The vendor archive has a top-level `vendor/` directory for RPM `Source1`. Source preparation can download Go modules; the RPM build itself uses the vendor archive offline.
+
+Each asset has a versioned download URL, for example `https://github.com/proddata/hermit/releases/download/vX.Y.Z/hermit-X.Y.Z.tar.gz` and `https://github.com/proddata/hermit/releases/download/vX.Y.Z/hermit-X.Y.Z-vendor.tar.gz`. Package builders can pin the published SHA256 values from `SHA256SUMS`. To keep released asset bytes and tags from being replaced, [enable GitHub release immutability](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/prevent-release-changes) for the repository before the first tagged release. The workflow creates the release with all assets attached before it is published. A rerun must not replace an existing published release; issue a new version for corrections.
+
 ## Release binaries, container, and Debian package
 
 The default [Dockerfile](../Dockerfile) builds Hermit from source but has no Go toolchain in its runtime stage. For a release built from one tested set of static Linux binaries, run:
@@ -23,13 +36,17 @@ sudo dnf install golang rpm-build systemd-rpm-macros
 ./packaging/rpm/build.sh
 ```
 
-The RPM build downloads Go modules before making its source archive, then builds and tests offline inside `rpmbuild`. CI builds, installs, and smoke-tests the package in a Fedora container, then uploads it. With Docker available, test the installed unit under systemd in a disposable Fedora container:
+`build.sh` creates a source tarball and a separate `go mod vendor` tarball. The latter may require access to the Go module cache or network while preparing the sources; `rpmbuild` then builds and tests with `-mod=vendor` and `GOTOOLCHAIN=local`, so its build root needs no module or toolchain download. The browser console is not included in either the source archive or the RPM. All `THIRD-PARTY-*` notices and licenses remain in the installed package.
+
+The spec requires the system `golang` RPM to provide Go 1.25.14 or newer. [Fedora 42's Go 1.24 package](https://packages.fedoraproject.org/pkgs/golang/golang-bin/fedora-42.html) does not meet this requirement. [Fedora 43's original Go 1.25.1 package](https://packages.fedoraproject.org/pkgs/golang/golang/fedora-43.html) also does not; use an updated Fedora 43 repository that provides 1.25.14 or newer, or use a [Fedora 44 build root](https://packages.fedoraproject.org/pkgs/golang/golang/fedora-44.html), which ships Go 1.26. For a pinned older build root, provide a newer `golang` RPM in its configured repository before resolving `BuildRequires`; installing an upstream Go tarball alone does not satisfy the RPM dependency. Check with `dnf repoquery --latest-limit=1 --qf '%{version}' golang` before building.
+
+CI builds, installs, and smoke-tests x86_64 and aarch64 RPMs in Fedora 44 containers, then uploads both artifacts. It also runs the arm64 package under systemd with the opt-in fixed-user key-access variant. With Docker available, run that systemd test in a disposable Fedora container:
 
 ```sh
 ./integration/fedora-service/run.sh dist/hermit-*.rpm
 ```
 
-This local test uses a privileged container with its own cgroup namespace. It checks package and unit verification, startup, the effective memory limits, restart after a forced crash, sysconfig changes across a restart, and clean stop. Use an RPM built for Docker's architecture. A real Fedora host is still needed to check integration with its ingress, PostgreSQL, certificates, and memory pressure. For installation and operation, see the [Fedora service guide](deployment.md#fedora-service).
+This local test uses a privileged container with its own cgroup namespace. It checks package and unit verification, startup, the effective memory limits, restart after a forced crash, sysconfig changes across a restart, the opt-in key-access variant's group-restricted key access, and clean stop. Use an RPM built for Docker's architecture. A real Fedora host is still needed to check integration with its ingress, PostgreSQL, certificates, and memory pressure. For installation and operation, see the [Fedora service guide](deployment.md#fedora-service).
 
 ## Test and inspect
 

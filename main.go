@@ -91,7 +91,8 @@ func main() {
 			os.Exit(1)
 		}
 		if len(allowedAddrs) > 0 {
-			if _, ok := allowedAddrs[defaultPGAddr]; !ok {
+			_, anyAllowed := allowedAddrs["*"]
+			if _, ok := allowedAddrs[defaultPGAddr]; !ok && !anyAllowed {
 				slog.Error("HERMIT_PG_ADDR must appear in HERMIT_PG_ALLOWED_ADDRS when routing is enabled")
 				os.Exit(1)
 			}
@@ -110,9 +111,24 @@ func main() {
 		slog.Error("HERMIT_PG_SSLMODE must be require or disable")
 		os.Exit(1)
 	}
-	pgRootCAs, err := gateway.LoadPGRootCAs(os.Getenv("HERMIT_PG_CA_FILE"))
+	pgQueryExecMode := env("HERMIT_PG_QUERY_EXEC_MODE", "exec")
+	if pgQueryExecMode != "exec" && pgQueryExecMode != "cache_describe" && pgQueryExecMode != "cache_statement" {
+		slog.Error("HERMIT_PG_QUERY_EXEC_MODE must be exec, cache_describe, or cache_statement")
+		os.Exit(1)
+	}
+	pgRootCAs, err := gateway.LoadPGRootCAs(os.Getenv("HERMIT_PG_CA_FILE"), os.Getenv("HERMIT_PG_EXTRA_CA_FILE"))
 	if err != nil {
 		slog.Error("invalid HERMIT_PG_CA_FILE", "error", err)
+		os.Exit(1)
+	}
+	allowedOrigins, err := gateway.ParseAllowedOrigins(os.Getenv("HERMIT_ALLOWED_ORIGIN"))
+	if err != nil {
+		slog.Error("invalid HERMIT_ALLOWED_ORIGIN", "error", err)
+		os.Exit(1)
+	}
+	trustedProxies, err := gateway.ParseTrustedProxies(os.Getenv("HERMIT_TRUSTED_PROXIES"))
+	if err != nil {
+		slog.Error("invalid HERMIT_TRUSTED_PROXIES", "error", err)
 		os.Exit(1)
 	}
 	cfg := gateway.Config{
@@ -124,8 +140,11 @@ func main() {
 		PGUser:               env("HERMIT_PG_USER", "postgres"),
 		PGPassword:           os.Getenv("HERMIT_PG_PASSWORD"),
 		PGSSLMode:            pgSSLMode,
+		PGQueryExecMode:      pgQueryExecMode,
+		PGTLSServerName:      os.Getenv("HERMIT_PG_TLS_SERVER_NAME"),
 		PGRootCAs:            pgRootCAs,
-		AllowedOrigin:        os.Getenv("HERMIT_ALLOWED_ORIGIN"),
+		AllowedOrigins:       allowedOrigins,
+		TrustedProxies:       trustedProxies,
 		QueryTimeout:         timeout,
 		WSIdleTimeout:        wsIdleTimeout,
 		WSWriteTimeout:       wsWriteTimeout,

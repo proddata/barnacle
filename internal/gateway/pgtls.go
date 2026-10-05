@@ -13,23 +13,35 @@ import (
 
 var pgSSLRequest = [8]byte{0, 0, 0, 8, 4, 210, 22, 47}
 
-func LoadPGRootCAs(path string) (*x509.CertPool, error) {
-	if path == "" {
+func LoadPGRootCAs(paths ...string) (*x509.CertPool, error) {
+	if len(paths) == 0 || len(paths) == 1 && paths[0] == "" {
 		return nil, nil // Go's system trust store
 	}
-	data, err := os.ReadFile(path)
+	roots, err := x509.SystemCertPool()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load system CA certificates: %w", err)
 	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(data) {
-		return nil, errors.New("HERMIT_PG_CA_FILE contains no certificates")
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("load PostgreSQL CA file %q: %w", path, err)
+		}
+		if !roots.AppendCertsFromPEM(data) {
+			return nil, fmt.Errorf("PostgreSQL CA file %q contains no certificates", path)
+		}
 	}
 	return roots, nil
 }
 
 func (c Config) PGTLSConfig(host string) *tls.Config {
-	return &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host, RootCAs: c.PGRootCAs}
+	serverName := host
+	if c.PGTLSServerName != "" {
+		serverName = c.PGTLSServerName
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName, RootCAs: c.PGRootCAs}
 }
 
 func (c Config) DialPostgres(addr string) (net.Conn, error) {

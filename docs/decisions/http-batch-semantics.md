@@ -1,27 +1,32 @@
 # SQL-over-HTTP batch semantics
 
-- **Status:** Deferred — decide before promising unconditional batch atomicity to customers
+- **Status:** Decided — conditional atomicity with PostgreSQL transaction-control semantics
 - **Date:** 2026-10-04
 - **Scope:** `POST /sql` with a `queries` array
 
-## Current behavior
+## Contract
 
-Hermit opens one PostgreSQL connection, begins a transaction, runs the query objects sequentially, collects their results, and commits. Errors before commit trigger a deferred rollback. The 100-query limit counts JSON query objects, not SQL statements. One `HERMIT_QUERY_TIMEOUT` deadline covers connection setup, every query, and commit. Batch results share the configured buffered-result budget.
+Hermit opens one PostgreSQL connection, begins a transaction, runs the query objects sequentially, collects and encodes the full response, then commits. An error before commit rolls back ordinary transactional writes. The tests cover a later SQL error, PostgreSQL statement timeout, Hermit's whole-request deadline, client abort during a later query, the buffered-result limit, and the final JSON response limit. The final JSON is now encoded and checked **before** commit, so its `413` response does not leave earlier writes committed. Once commit succeeds, a later client disconnect cannot undo it.
 
-Hermit does not parse SQL. By default pgx uses PostgreSQL's extended query protocol, which rejects multiple SQL commands in one prepared query. A client-supplied connection string can set `default_query_exec_mode=simple_protocol`, however, and that mode accepts multiple commands in one query string. A single transaction-control command such as `COMMIT` can also interfere with the transaction Hermit opened. The current batch integration tests prove successful results and isolation settings, but do not prove rollback on a later failure or behavior with these inputs. Treat the batch as one transaction for ordinary statements, not as an enforced SQL statement boundary.
+**Explicit transaction-control SQL is allowed and follows PostgreSQL semantics.** It can end Hermit's transaction, so batches containing it are not unconditionally atomic. In particular, `COMMIT` persists an earlier write despite a later query error. `ROLLBACK` discards earlier work, but a later write can run in a new implicit transaction and persist despite a subsequent error. `BEGIN` inside the already open transaction leaves the later error to roll it back. Clients that need all-or-nothing writes must not include transaction-control commands or SQL with nontransactional side effects. Hermit does not attempt keyword filtering: safely rejecting every transaction-control form would require a PostgreSQL-aware parser or another server-side enforcement mechanism, and Neon accepts these commands too.
 
-## Decisions to make
+Each query object must contain one SQL statement. Hermit uses PostgreSQL's extended query protocol, which rejects multiple commands in a prepared query with SQLSTATE `42601`. The HTTP connection-string allowlist rejects `default_query_exec_mode=simple_protocol` with `400` / `HERMIT_ERROR`; clients cannot select simple protocol through that option. PostgreSQL's [protocol documentation](https://www.postgresql.org/docs/current/protocol-flow.html) describes the extended-protocol multi-command restriction and the effect of explicit transaction commands.
 
-1. Should Hermit force one extended-protocol execution mode for all HTTP queries, regardless of connection-string options?
-2. Should batch query objects reject explicit transaction-control commands? If so, choose a PostgreSQL-aware parser or another robust enforcement method; semicolon and keyword matching are insufficient.
-3. What error contract should clients receive for a rejected multi-command query or transaction-control command?
-4. Should batch count, request size, buffered result size, and the whole-request deadline remain at their current defaults? The sizing decision is tracked in [SQL-over-HTTP limits](sql-http-limits.md).
+The 100-query limit counts JSON query objects, not SQL statements. One `HERMIT_QUERY_TIMEOUT` deadline covers connection setup, every query, and commit. Batch results share the configured buffered-result budget. Ordinary PostgreSQL query errors return `400` with the SQLSTATE; configured result limits return `413`.
 
-## Evidence required
+## Integration evidence
 
-- Integration tests that confirm a later SQL error rolls back earlier writes, including through PgBouncer transaction pooling.
-- Tests for a multi-command query string, a connection-string request for simple protocol, and explicit transaction-control SQL in a batch.
-- Tests for timeout, client cancellation, and result-limit failure after an earlier write, confirming what persists in PostgreSQL.
-- A representative customer workload to size the batch count, total duration, and result budget.
+The local [batch integration tests](../../integration/batch-atomicity.test.mjs) use a disposable table and check persistence after each request. A short-deadline gateway checks Hermit's own timeout, and a low-response-limit gateway checks the final encoding path.
 
-Do not change the execution behavior until the contract and compatibility impact are decided together.
+The configured `NEON_COMPARE_DATABASE_URL` was also exercised on 2026-10-04 with equivalent read-only batch inputs:
+
+| Input | Hermit | Neon proxy |
+| --- | --- | --- |
+| `COMMIT`, `ROLLBACK`, or `BEGIN` between a successful query and `1/0` | `400`, `22012` | `400`, `22012` |
+| Two statements in one query string | `400`, `42601` | `400`, `42601` |
+| `default_query_exec_mode=simple_protocol` with `select 1` | `400`, unsupported connection option | `200`; adding two statements still returns `42601`, so acceptance does not enable simple protocol there |
+| PostgreSQL statement timeout after an earlier query | `400`, `57014` | `400`, `57014` |
+| About 5 MiB of batch result data | `413` under Hermit's 4 MiB buffered limit | `200` |
+| Client abort during a later sleeping query | Client receives `AbortError` | Client receives `AbortError` |
+
+The Neon comparison role (`pgext_probe` in `test2`) has neither database nor `public` schema `CREATE` privilege. Creating the disposable table returned `400` (`permission denied for schema public`), so remote write persistence, Hermit's configured deadline, and Hermit's configured response-size limit could not be compared. The local integration tests prove those persistence outcomes against PostgreSQL. PgBouncer pooling modes have a separate [integration check](../../integration/pgbouncer/pool-modes.mjs).

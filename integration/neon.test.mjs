@@ -8,6 +8,7 @@ globalThis.WebSocket = WebSocket;
 const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL for the integration suite');
+const poolerTopology = process.env.HERMIT_TEST_PGBOUNCER === '1';
 const endpoint = new URL(base);
 
 neonConfig.fetchEndpoint = `${base}/sql`;
@@ -218,7 +219,7 @@ test('Neon HTTP exposes authentication and SQL error details', async () => {
   const wrongPassword = new URL(databaseUrl);
   wrongPassword.password = 'incorrect-password';
   await assert.rejects(neon(wrongPassword.toString()).query('select 1'), (error) => {
-    assert.equal(error.code, '28P01');
+    assert.equal(error.code, poolerTopology ? '08P01' : '28P01');
     assert.equal(error.severity, 'FATAL');
     return true;
   });
@@ -226,14 +227,14 @@ test('Neon HTTP exposes authentication and SQL error details', async () => {
   const missingDatabase = new URL(databaseUrl);
   missingDatabase.pathname = '/hermit_missing_database';
   await assert.rejects(neon(missingDatabase.toString()).query('select 1'), (error) => {
-    assert.equal(error.code, '3D000');
+    assert.equal(error.code, poolerTopology ? '08P01' : '3D000');
     return true;
   });
 
   const missingRole = new URL(databaseUrl);
   missingRole.username = 'hermit_missing_role';
   await assert.rejects(neon(missingRole.toString()).query('select 1'), (error) => {
-    assert.equal(error.code, '28P01'); // SCRAM does not disclose whether the role exists.
+    assert.equal(error.code, poolerTopology ? '08P01' : '28P01'); // PgBouncer reports its own login failure.
     return true;
   });
 

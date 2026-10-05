@@ -14,8 +14,7 @@
       <div class="top-actions">
         <button id="toggle-connection" class="subtle-button" type="button" aria-expanded="true" aria-controls="connection-panel">Connection <span aria-hidden="true">⌄</span></button>
         <span id="connection-badge" class="connection-badge"><span class="status-dot"></span> Not connected</span>
-        <button id="run-query" class="primary-button" type="button"><span aria-hidden="true">▶</span> Run query <kbd>⌘/Ctrl ↵</kbd></button>
-        <button id="run-all" class="subtle-button run-all" type="button" title="Run every statement in this tab">Run all</button>
+        <button id="run-query" class="primary-button" type="button"><span aria-hidden="true">▶</span> <span id="run-label">Run all</span> <kbd>⌘/Ctrl ↵</kbd></button>
       </div>
     </header>
 
@@ -41,6 +40,9 @@
             <option value="ws-password">WebSocket · password</option>
           </select>
         </label>
+        <label id="http-batch-field" class="batch-field">HTTP execution
+          <span class="batch-control"><input id="http-batch" type="checkbox"> One transaction</span>
+        </label>
         <label id="auth-method-field">Require auth
           <select id="auth-method">
             <option value="">Automatic</option>
@@ -49,7 +51,7 @@
           </select>
         </label>
       </div>
-      <div class="connection-hint">The target host must be allowed by Hermit routing. In fixed mode, Hermit uses its configured upstream. The Compose development password is prefilled for local testing.</div>
+      <div class="connection-hint">Enter a PostgreSQL host:port. Local Compose allows external hosts; other deployments may restrict them. The Compose development password is prefilled for local testing.</div>
     </section>
 
     <div id="workbench" class="workbench">
@@ -57,6 +59,10 @@
         <div class="panel-heading"><div><span class="eyebrow">DATABASE</span><h2>Explorer</h2></div><button id="refresh-schema" class="icon-button" type="button" title="Refresh schemas and tables" aria-label="Refresh schemas and tables">↻</button></div>
         <div class="explorer-search"><span aria-hidden="true">⌕</span><input id="tree-filter" type="search" placeholder="Filter tables" aria-label="Filter tables"></div>
         <div id="schema-tree" class="schema-tree"><p class="empty-note">Enter a password, then refresh to browse tables.</p></div>
+        <section class="startup-panel" aria-labelledby="startup-heading">
+          <div class="startup-heading"><div><span class="eyebrow">SESSION</span><h3 id="startup-heading">Server startup</h3></div><span id="startup-state">No session</span></div>
+          <div id="startup-details" class="startup-details"><p class="startup-empty">Run a query over WebSocket to see the server's startup parameters.</p></div>
+        </section>
         <div class="panel-footnote">Click a table to preview rows. Expand it to inspect columns.</div>
       </aside>
       <div id="resize-left" class="resize-handle vertical" role="separator" tabindex="0" aria-label="Resize database explorer" aria-orientation="vertical"></div>
@@ -66,6 +72,12 @@
           <div id="query-tabs" class="query-tabs" role="tablist" aria-label="SQL query tabs"></div>
           <button id="new-tab" class="icon-button new-tab" type="button" title="New query tab" aria-label="New query tab">+</button>
           <span class="toolbar-spacer"></span>
+          <select id="example-query" class="example-select" aria-label="Open example query">
+            <option value="">Examples…</option>
+            <option value="transaction-delay">Transaction with delay</option>
+            <option value="failed-transaction">Failed transaction</option>
+            <option value="server-info">Server and session info</option>
+          </select>
           <button id="toggle-explorer" class="subtle-button compact" type="button" title="Toggle database explorer" aria-controls="explorer-panel" aria-expanded="true">Explorer</button>
           <button id="toggle-debug" class="subtle-button compact" type="button" title="Toggle debug panel" aria-controls="debug-panel" aria-expanded="true">Debug</button>
         </div>

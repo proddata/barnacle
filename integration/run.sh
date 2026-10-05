@@ -31,7 +31,7 @@ if [ "$ready" -ne 1 ]; then cat "$log"; exit 1; fi
 if [ "${HERMIT_ROUTING_ONLY:-}" = 1 ]; then
   node integration/routing.mjs
 else
-  npm test --prefix integration
+  HERMIT_BATCH_BINARY="$binary" HERMIT_WS_IDLE_BINARY="$binary" npm test --prefix integration
   HERMIT_SHUTDOWN_BINARY="$binary" node integration/shutdown.mjs
   HERMIT_TIMEOUT_BINARY="$binary" node integration/http-timeouts.mjs
   if [ "${HERMIT_BROWSER_CORS:-}" = 1 ]; then

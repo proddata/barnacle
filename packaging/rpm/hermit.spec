@@ -7,6 +7,7 @@ Summary:        HTTP and WebSocket proxy for PostgreSQL
 # also include MIT and BSD-3-Clause licensed code (see THIRD-PARTY-NOTICES.md).
 License:        Apache-2.0 AND MIT AND BSD-3-Clause
 Source0:        %{name}-%{version}.tar.gz
+Source1:        %{name}-%{version}-vendor.tar.gz
 BuildRequires:  golang >= 1.25.14
 BuildRequires:  systemd-rpm-macros
 
@@ -15,25 +16,24 @@ Hermit carries PostgreSQL wire traffic over WebSocket and serves a
 Neon-compatible subset of SQL over HTTP for one configured PostgreSQL server.
 
 %prep
-%setup -q
+%setup -q -a 1
 
 %build
 export CGO_ENABLED=0
-export GOPROXY=off
-export GOSUMDB=off
+export GOTOOLCHAIN=local
 export GOCACHE="%{_builddir}/hermit-go-cache"
-go build -mod=mod -trimpath -ldflags='-s -w' -o hermit .
+go build -mod=vendor -trimpath -ldflags='-s -w' -o hermit .
 
 %check
-export GOPROXY=off
-export GOSUMDB=off
+export GOTOOLCHAIN=local
 export GOCACHE="%{_builddir}/hermit-go-cache"
-go test -mod=mod ./...
+go test -mod=vendor ./...
 
 %install
 install -Dpm 0755 hermit %{buildroot}%{_bindir}/hermit
 install -Dpm 0644 packaging/rpm/hermit.service %{buildroot}%{_unitdir}/hermit.service
 install -Dpm 0644 packaging/rpm/hermit.sysconfig %{buildroot}%{_sysconfdir}/sysconfig/hermit
+install -Dpm 0644 packaging/rpm/hermit-key-access.conf %{buildroot}%{_datadir}/%{name}/hermit-key-access.conf
 install -Dpm 0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
 install -Dpm 0644 THIRD-PARTY-NOTICES.md %{buildroot}%{_licensedir}/%{name}/THIRD-PARTY-NOTICES.md
 for license in THIRD-PARTY-LICENSES/*; do
@@ -54,6 +54,7 @@ done
 %license %{_licensedir}/%{name}
 %{_bindir}/hermit
 %{_unitdir}/hermit.service
+%{_datadir}/%{name}/hermit-key-access.conf
 %config(noreplace) %{_sysconfdir}/sysconfig/hermit
 
 %changelog

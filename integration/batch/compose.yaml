@@ -1,0 +1,33 @@
+services:
+  hermit_batch_timeout:
+    build: .
+    environment:
+      HERMIT_LISTEN: ':8080'
+      HERMIT_PG_ADDR: postgres:5432
+      HERMIT_PG_ALLOWED_ADDRS: ''
+      HERMIT_PG_SSLMODE: require
+      HERMIT_PG_CA_FILE: /pgcerts/ca.crt
+      HERMIT_QUERY_TIMEOUT: 1500ms
+    ports:
+      - '127.0.0.1:8083:8080'
+    volumes:
+      - pgcerts:/pgcerts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+  hermit_batch_response_limit:
+    build: .
+    environment:
+      HERMIT_LISTEN: ':8080'
+      HERMIT_PG_ADDR: postgres:5432
+      HERMIT_PG_ALLOWED_ADDRS: ''
+      HERMIT_PG_SSLMODE: require
+      HERMIT_PG_CA_FILE: /pgcerts/ca.crt
+      HERMIT_HTTP_MAX_RESPONSE_MIB: '1'
+    ports:
+      - '127.0.0.1:8084:8080'
+    volumes:
+      - pgcerts:/pgcerts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy

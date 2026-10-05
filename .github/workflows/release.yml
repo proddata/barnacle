@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      number: ${{ steps.check.outputs.number }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        name: Match tag to package version
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version=${GITHUB_REF_NAME#v}
+          test "$version" = "$(awk '/^Version:/ { print $2; exit }' packaging/rpm/hermit.spec)"
+          echo "number=$version" >> "$GITHUB_OUTPUT"
+
+  sources:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Create deterministic source and vendor archives
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.number }}
+        run: python3 packaging/release/source.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-sources
+          if-no-files-found: error
+          path: |
+            dist/hermit-${{ needs.version.outputs.number }}.tar.gz
+            dist/hermit-${{ needs.version.outputs.number }}-vendor.tar.gz
+
+  binaries-packages-image:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Build static binaries and Debian packages
+        run: |
+          ./packaging/release/build.sh
+          ./packaging/deb/build.sh
+      - name: Build multi-platform OCI archive with attestations
+        run: ./packaging/release/image.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-built
+          if-no-files-found: error
+          path: |
+            dist/hermit-linux-amd64
+            dist/hermit-linux-arm64
+            dist/hermit_*.deb
+            dist/hermit-image.oci.tar
+
+  rpm:
+    needs: [version, sources]
+    name: RPM (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: fedora:44
+    steps:
+      - run: dnf install -y golang git python3 rpm-build systemd-rpm-macros tar gzip
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-sources
+          path: dist
+      - name: Build RPM from published source archives
+        env:
+          HERMIT_SOURCE_ARCHIVE_DIR: ${{ github.workspace }}/dist
+        run: ./packaging/rpm/build.sh
+      - name: Verify RPM
+        run: |
+          test "$(rpm -qp --qf '%{ARCH}' dist/hermit-*.rpm)" = '${{ matrix.arch }}'
+          test "$(rpm -qp --qf '%{VERSION}' dist/hermit-*.rpm)" = '${{ needs.version.outputs.number }}'
+          dnf install -y dist/hermit-*.rpm
+          rpm -V hermit
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-rpm-${{ matrix.arch }}
+          if-no-files-found: error
+          path: dist/hermit-*.rpm
+
+  publish:
+    needs: [version, sources, binaries-packages-image, rpm]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Check complete artifact set and write checksums
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            test -s "dist/hermit-linux-$arch"
+            test -s "dist/hermit_${VERSION}_${arch}.deb"
+          done
+          test -s "dist/hermit-${VERSION}.tar.gz"
+          test -s "dist/hermit-${VERSION}-vendor.tar.gz"
+          test -s dist/hermit-image.oci.tar
+          test "$(find dist -maxdepth 1 -name 'hermit-*.rpm' | wc -l)" -eq 2
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 9
+          cd dist
+          find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Release artifacts and SHA256SUMS for $GITHUB_REF_NAME."

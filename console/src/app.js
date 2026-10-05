@@ -2,8 +2,8 @@ import * as monaco from 'monaco-editor/editor/editor.api';
 import 'monaco-editor/languages/definitions/pgsql/register';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import './style.css';
-import { COLUMNS_SQL, TABLES_SQL, executeQuery, quoteIdentifier, safeError, safeJSON } from './db.js';
-import { splitStatements, statementAt } from './statements.js';
+import { COLUMNS_SQL, TABLES_SQL, closeQuerySession, executeBatch, executeQuery, quoteIdentifier, safeError, safeJSON } from './db.js';
+import { splitStatements } from './statements.js';
 
 self.MonacoEnvironment = { getWorker() { return new EditorWorker(); } };
 
@@ -12,12 +12,15 @@ const workbench = $('workbench');
 const editorNode = $('sql-editor');
 const tabBar = $('query-tabs');
 const treeNode = $('schema-tree');
+const startupDetails = $('startup-details');
+const startupState = $('startup-state');
 const traceList = $('trace-list');
 const traceDetail = $('trace-detail');
 const resultData = $('result-data');
 const resultJSON = $('result-json');
 const resultSummary = $('result-summary');
 const runButton = $('run-query');
+const batchToggle = $('http-batch');
 const statusMessage = $('status-message');
 const statusMeta = $('status-meta');
 const connectionBadge = $('connection-badge');
@@ -25,6 +28,40 @@ const fields = Object.fromEntries(['connection-name', 'host', 'database', 'usern
 
 const PROFILE_KEY = 'hermit-console-connections-v1';
 const defaultProfile = { id: 'local-dev', name: 'Local development', host: 'postgres:5432', database: 'hermit', username: 'hermit', method: 'http-password', authMethod: '' };
+const examples = {
+  'transaction-delay': {
+    name: 'Transaction with delay',
+    websocket: true,
+    sql: `-- Use WebSocket · password, then Run all. Results appear after each statement.
+BEGIN;
+SELECT 1 AS first_result;
+SELECT pg_sleep(5), 2 AS delayed_result;
+SELECT 3 AS last_result;
+COMMIT;`,
+  },
+  'failed-transaction': {
+    name: 'Failed transaction',
+    websocket: true,
+    sql: `-- Use WebSocket · password, then Run all. It stops at the expected error.
+BEGIN;
+SELECT 1 AS before_error;
+SELECT 1 / 0 AS intentional_error;
+-- Select and run this to see PostgreSQL reject work in the aborted transaction:
+SELECT 2 AS blocked_while_aborted;
+-- Select and run this statement to recover:
+ROLLBACK;
+-- Then select and run this statement to verify recovery:
+SELECT 3 AS after_rollback;`,
+  },
+  'server-info': {
+    name: 'Server and session info',
+    sql: `SELECT current_setting('server_version') AS server_version,
+       current_database() AS database_name,
+       current_user AS user_name,
+       current_setting('search_path') AS search_path,
+       current_schemas(true) AS effective_schemas;`,
+  },
+};
 function loadProfiles() {
   try {
     const data = JSON.parse(localStorage.getItem(PROFILE_KEY));
@@ -77,6 +114,12 @@ const editor = monaco.editor.create(editorNode, {
   wordWrap: 'on', tabSize: 2,
 });
 editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runCurrent());
+editor.onDidChangeCursorSelection(updateRunLabel);
+
+function updateRunLabel() {
+  const selected = editor.getModel()?.getValueInRange(editor.getSelection()).trim();
+  $('run-label').textContent = selected ? 'Run selection' : 'Run all';
+}
 
 function settings() {
   return {
@@ -95,6 +138,7 @@ function saveProfileFromFields() {
     name: fields['connection-name'].value.trim() || 'Unnamed connection',
     host: fields.host.value, database: fields.database.value, username: fields.username.value,
     method: fields.method.value, authMethod: fields['auth-method'].value,
+    httpBatch: batchToggle.checked,
   });
   secrets.set(profile.id, { password: fields.password.value, token: fields.token.value });
   localStorage.setItem(PROFILE_KEY, JSON.stringify(profiles));
@@ -118,6 +162,7 @@ function showConnection(id) {
   fields['connection-name'].value = profile.name;
   for (const name of ['host', 'database', 'username', 'method']) fields[name].value = profile[name] ?? '';
   fields['auth-method'].value = profile.authMethod ?? '';
+  batchToggle.checked = profile.httpBatch === true;
   fields.password.value = secret.password;
   fields.token.value = secret.token;
   updateMethodFields(); renderConnectionSelect();
@@ -144,12 +189,18 @@ function updateMethodFields() {
   $('password-field').hidden = method === 'http-bearer';
   $('token-field').hidden = method !== 'http-bearer';
   $('auth-method-field').hidden = method !== 'http-password';
+  $('http-batch-field').hidden = method === 'ws-password';
+}
+
+function setRunBusy(value) {
+  busy = value;
+  runButton.disabled = value;
 }
 
 function createTab(name = `Query ${nextTabId + 1}`, sql = '') {
   const id = ++nextTabId;
   const model = monaco.editor.createModel(sql, 'pgsql', monaco.Uri.parse(`inmemory://hermit/query-${id}.pgsql`));
-  tabs.push({ id, name, model, connectionId: activeConnectionId, results: [], selectedResultIndex: 0, resultView: 'data' });
+  tabs.push({ id, name, model, connectionId: activeConnectionId, session: { onChange: renderConnectionInfo }, results: [], selectedResultIndex: 0, resultView: 'data' });
   activateTab(id);
   return id;
 }
@@ -160,8 +211,10 @@ function activateTab(id) {
   activeTabId = id;
   lastTabByConnection.set(tab.connectionId, id);
   editor.setModel(tab.model);
+  updateRunLabel();
   renderTabs();
   renderResult();
+  renderConnectionInfo();
   showResultView(tab.resultView);
   editor.focus();
 }
@@ -171,6 +224,7 @@ function closeTab(id) {
   const index = tabs.findIndex((tab) => tab.id === id);
   if (index < 0) return;
   const [tab] = tabs.splice(index, 1);
+  void closeQuerySession(tab.session);
   if (activeTabId === id) activateTab((tabs.find((item) => item.connectionId === activeConnectionId) ?? tabs[Math.min(index, tabs.length - 1)]).id);
   tab.model.dispose();
   renderTabs();
@@ -193,16 +247,46 @@ function renderTabs() {
 
 function activeTab() { return tabs.find((tab) => tab.id === activeTabId); }
 
-function selectedStatements(all = false) {
+function renderConnectionInfo() {
+  startupDetails.replaceChildren();
+  const session = activeTab()?.session;
+  if (fields.method.value !== 'ws-password' || !session?.client || !session.connection) {
+    startupState.textContent = 'No session';
+    const empty = document.createElement('p'); empty.className = 'startup-empty';
+    empty.textContent = fields.method.value === 'ws-password'
+      ? 'Run a query to open this tab’s WebSocket session.'
+      : 'Select WebSocket transport to see startup parameters.';
+    startupDetails.append(empty);
+    return;
+  }
+  startupState.textContent = 'Connected';
+  const table = document.createElement('table'); table.className = 'startup-table';
+  const head = document.createElement('thead');
+  const header = document.createElement('tr');
+  for (const label of ['Parameter', 'Value']) {
+    const cell = document.createElement('th'); cell.textContent = label; header.append(cell);
+  }
+  head.append(header); table.append(head);
+  const body = document.createElement('tbody');
+  const rows = [
+    ...(session.connection.backendProcessID === null ? [] : [['Backend PID', String(session.connection.backendProcessID)]]),
+    ...session.connection.parameters.map(({ name, value }) => [name, value])
+      .sort(([a], [b]) => a.localeCompare(b)),
+  ];
+  for (const [name, value] of rows) {
+    const row = document.createElement('tr');
+    const key = document.createElement('th'); key.scope = 'row'; key.textContent = name;
+    const cell = document.createElement('td'); cell.textContent = value;
+    row.append(key, cell); body.append(row);
+  }
+  table.append(body); startupDetails.append(table);
+}
+
+function selectedStatements() {
   const model = editor.getModel();
-  if (all) return splitStatements(model.getValue());
   const selection = editor.getSelection();
   const selected = model.getValueInRange(selection);
-  if (selected.trim()) return splitStatements(selected);
-  const sql = model.getValue();
-  const offset = model.getOffsetAt(selection.getStartPosition());
-  const statement = statementAt(sql, offset);
-  return statement ? [statement] : [];
+  return splitStatements(selected.trim() ? selected : model.getValue());
 }
 
 function reportTrace(trace) {
@@ -226,7 +310,7 @@ function renderTraceList() {
     item.type = 'button'; item.className = `trace-item ${trace.id === selectedTraceId ? 'active' : ''}`;
     const copy = document.createElement('span');
     const title = document.createElement('strong'); title.textContent = `${trace.transport} · ${trace.purpose === 'query' ? 'Query' : trace.purpose}`;
-    const detail = document.createElement('small'); detail.textContent = `${trace.startedAt} · ${trace.durationMs ?? '…'} ms`;
+    const detail = document.createElement('small'); detail.textContent = `${trace.startedAt} · ${trace.durationMs ?? '…'} ms${trace.connectionReused ? ' · reused connection' : ''}`;
     const state = document.createElement('span'); state.className = `trace-status ${trace.state}`;
     state.textContent = trace.state === 'success' ? '✓' : trace.state === 'error' ? '!' : '…';
     copy.append(title, detail); item.append(copy, state);
@@ -378,19 +462,23 @@ function showResultView(view) {
   resultData.hidden = view !== 'data'; resultJSON.hidden = view !== 'json';
 }
 
-async function runCurrent(all = false) {
+async function runCurrent() {
   if (busy) return;
-  const statements = selectedStatements(all);
+  const statements = selectedStatements();
   if (!statements.length) { setStatus('Write a query first.'); return; }
   const tab = activeTab();
   const current = settings();
-  busy = true; runButton.disabled = true; $('run-all').disabled = true;
+  if (current.method !== 'ws-password' && batchToggle.checked) {
+    await runHTTPBatch(statements, tab, current);
+    return;
+  }
+  setRunBusy(true);
   tab.results = []; tab.selectedResultIndex = 0;
   setStatus(`Running ${statements.length} statement${statements.length === 1 ? '' : 's'}…`);
   for (const [index, statement] of statements.entries()) {
     const started = performance.now();
     try {
-      const result = await executeQuery(current, statement.sql, [], reportTrace);
+      const result = await executeQuery(current, statement.sql, [], reportTrace, 'query', tab.session);
       tab.results.push({ ...result, sql: statement.sql, durationMs: Math.round(performance.now() - started) });
       setConnectionState('connected', `${current.host} / ${current.database}`);
     } catch (error) {
@@ -405,8 +493,32 @@ async function runCurrent(all = false) {
     setStatus(`Completed ${index + 1} of ${statements.length}`, `${current.host} / ${current.database}`);
     if (activeTabId === tab.id) renderResult();
   }
-  busy = false; runButton.disabled = false; $('run-all').disabled = false;
+  setRunBusy(false);
   if (activeTabId === tab.id) { renderResult(); showResultView('data'); }
+}
+
+async function runHTTPBatch(statements, tab, current) {
+  if (statements.length > 100) { setStatus('HTTP batch limit is 100 statements.'); return; }
+  setRunBusy(true);
+  tab.results = []; tab.selectedResultIndex = 0;
+  setStatus(`Running ${statements.length} statements in one HTTP transaction…`);
+  const started = performance.now();
+  try {
+    const results = await executeBatch(current, statements.map((statement) => statement.sql), reportTrace);
+    const durationMs = Math.round(performance.now() - started);
+    tab.results = results.map((result, index) => ({ ...result, sql: statements[index].sql, durationMs }));
+    tab.selectedResultIndex = results.length - 1;
+    setStatus(`HTTP transaction completed · ${results.length} results`, `${current.host} / ${current.database}`);
+    setConnectionState('connected', `${current.host} / ${current.database}`);
+  } catch (error) {
+    const message = safeError(error, current);
+    tab.results = [{ sql: 'HTTP transaction', error: message, durationMs: Math.round(performance.now() - started) }];
+    setStatus('HTTP transaction failed', message);
+    setConnectionState('failed', `${current.host} / ${current.database}`);
+  } finally {
+    setRunBusy(false);
+    if (activeTabId === tab.id) { renderResult(); showResultView('data'); }
+  }
 }
 
 function objectKind(kind) {
@@ -556,10 +668,22 @@ function togglePanel(side) {
 }
 
 $('run-query').addEventListener('click', () => runCurrent());
-$('run-all').addEventListener('click', () => runCurrent(true));
 $('refresh-schema').addEventListener('click', refreshSchema);
 $('tree-filter').addEventListener('input', renderTree);
 $('new-tab').addEventListener('click', () => createTab());
+$('example-query').addEventListener('change', (event) => {
+  const example = examples[event.target.value];
+  event.target.value = '';
+  if (!example) return;
+  createTab(example.name, example.sql);
+  setStatus(example.websocket && fields.method.value !== 'ws-password'
+    ? 'Select WebSocket · password before running this example.'
+    : `Opened ${example.name}`);
+});
+batchToggle.addEventListener('change', () => {
+  saveProfileFromFields();
+  setStatus(batchToggle.checked ? 'HTTP queries will run as one transaction.' : 'HTTP queries will run separately.');
+});
 $('clear-debug').addEventListener('click', () => { traces = []; selectedTraceId = null; renderTraceList(); renderTraceDetail(); });
 $('view-data').addEventListener('click', () => showResultView('data'));
 $('view-json').addEventListener('click', () => showResultView('json'));
@@ -571,12 +695,16 @@ $('toggle-connection').addEventListener('click', () => {
   $('toggle-connection').ariaExpanded = String(!panel.hidden);
   requestAnimationFrame(() => editor.layout());
 });
-function connectionChanged() {
+function connectionChanged(event) {
+  if (event.target.id !== 'connection-name') {
+    for (const tab of tabs.filter((item) => item.connectionId === activeConnectionId)) void closeQuerySession(tab.session);
+  }
   if (activeConnectionId === 'local-dev' &&
       (fields.host.value !== 'postgres:5432' || fields.database.value !== 'hermit' || fields.username.value !== 'hermit') &&
       fields.password.value === 'hermit_dev_password') fields.password.value = '';
   saveProfileFromFields(); renderConnectionSelect();
   setConnectionState('', 'Connection changed');
+  renderConnectionInfo();
   schemaRows = []; columnsCache.clear(); renderTree();
 }
 $('connection-select').addEventListener('change', (event) => {
@@ -598,7 +726,10 @@ $('delete-connection').addEventListener('click', () => {
   const deleted = activeConnectionId;
   profiles = profiles.filter((profile) => profile.id !== deleted);
   secrets.delete(deleted);
-  for (const tab of tabs.filter((item) => item.connectionId === deleted)) { tab.model.dispose(); }
+  for (const tab of tabs.filter((item) => item.connectionId === deleted)) {
+    void closeQuerySession(tab.session);
+    tab.model.dispose();
+  }
   tabs = tabs.filter((item) => item.connectionId !== deleted);
   lastTabByConnection.delete(deleted);
   localStorage.setItem(PROFILE_KEY, JSON.stringify(profiles));
