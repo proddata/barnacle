@@ -2,6 +2,7 @@ package sqlhttp
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -55,18 +56,28 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 func writeLimitedJSON(w http.ResponseWriter, status int, value any, maxBytes int64) {
-	encoded, err := json.Marshal(value)
+	encoded, err := encodeLimitedJSON(value, maxBytes)
 	if err != nil {
-		apiError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if maxBytes > 0 && int64(len(encoded)) > maxBytes {
-		apiError(w, http.StatusRequestEntityTooLarge, errHTTPResultTooLarge)
+		if errors.Is(err, errHTTPResultTooLarge) {
+			apiError(w, http.StatusRequestEntityTooLarge, err)
+		} else {
+			apiError(w, http.StatusInternalServerError, err)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(encoded)
+}
+func encodeLimitedJSON(value any, maxBytes int64) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	if maxBytes > 0 && int64(len(encoded)) > maxBytes {
+		return nil, errHTTPResultTooLarge
+	}
+	return encoded, nil
 }
 func apiError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]any{"message": err.Error(), "code": "HERMIT_ERROR"})
@@ -134,6 +145,16 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	pgcfg.Host = host
 	pgcfg.Port = uint16(port)
 	pgcfg.Fallbacks = nil
+	switch c.PGQueryExecMode {
+	case "", "exec":
+		pgcfg.DefaultQueryExecMode = pgx.QueryExecModeExec
+	case "cache_describe":
+		pgcfg.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
+	case "cache_statement":
+		pgcfg.DefaultQueryExecMode = pgx.QueryExecModeCacheStatement
+	default:
+		return nil, errors.New("invalid PostgreSQL query execution mode")
+	}
 	if c.MaxHTTPRowBytes > 0 {
 		pgcfg.MaxProtocolMessageBodyLen = int(c.MaxHTTPRowBytes) + pgRowMessageOverhead
 	}
@@ -180,11 +201,16 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	decoder.UseNumber()
 	if err := decoder.Decode(&req); err != nil {
-		apiError(w, 400, err)
+		requestDecodeError(w, err)
 		return
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		apiError(w, 400, errors.New("one JSON object required"))
+		var oversized *http.MaxBytesError
+		if errors.As(err, &oversized) {
+			requestDecodeError(w, err)
+		} else {
+			apiError(w, 400, errors.New("one JSON object required"))
+		}
 		return
 	}
 	batch := req.Queries != nil
@@ -303,6 +329,18 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, item)
 	}
+	var encodedBatch []byte
+	if batch {
+		encodedBatch, err = encodeLimitedJSON(map[string]any{"results": results}, c.MaxHTTPResponseBytes)
+		if err != nil {
+			if errors.Is(err, errHTTPResultTooLarge) {
+				apiError(w, http.StatusRequestEntityTooLarge, err)
+			} else {
+				apiError(w, http.StatusInternalServerError, err)
+			}
+			return
+		}
+	}
 	if tx != nil {
 		if err := tx.Commit(ctx); err != nil {
 			dbError(w, err)
@@ -310,10 +348,21 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if batch {
-		writeLimitedJSON(w, 200, map[string]any{"results": results}, c.MaxHTTPResponseBytes)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(encodedBatch)
 	} else {
 		writeLimitedJSON(w, 200, results[0], c.MaxHTTPResponseBytes)
 	}
+}
+
+func requestDecodeError(w http.ResponseWriter, err error) {
+	var oversized *http.MaxBytesError
+	if errors.As(err, &oversized) {
+		apiError(w, http.StatusRequestEntityTooLarge, errors.New("request is too large"))
+		return
+	}
+	apiError(w, http.StatusBadRequest, err)
 }
 
 func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, remaining *int64) (result, error) {
@@ -477,6 +526,16 @@ func dbError(w http.ResponseWriter, err error) {
 	var oversized *pgproto3.ExceededMaxBodyLenErr
 	if errors.As(err, &oversized) {
 		apiError(w, http.StatusRequestEntityTooLarge, errHTTPResultTooLarge)
+		return
+	}
+	var unknownCA x509.UnknownAuthorityError
+	var wrongHost x509.HostnameError
+	var invalidCert x509.CertificateInvalidError
+	if errors.As(err, &unknownCA) || errors.As(err, &wrongHost) || errors.As(err, &invalidCert) {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"message": "PostgreSQL TLS certificate verification failed; check the CA certificate and host name",
+			"code":    "HERMIT_UPSTREAM_TLS_VERIFICATION_FAILED",
+		})
 		return
 	}
 	// pgx 5.11 reports a rejected OAUTHBEARER token as a wrapped SASL error,

@@ -1,0 +1,45 @@
+services:
+  pgbouncer_tls:
+    build: ./integration/pgbouncer
+    environment:
+      POOL_MODE: session
+      TLS_MODE: require
+      POOL_SIZE: '32'
+    volumes:
+      - pgcerts:/pgcerts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+  haproxy_leader:
+    image: haproxy:3.1-alpine
+    volumes:
+      - ./integration/topology/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer_tls:
+        condition: service_started
+  hermit_topology:
+    build: .
+    environment:
+      HERMIT_LISTEN: ':8080'
+      HERMIT_PG_ADDR: '${T11_UPSTREAM:?set T11_UPSTREAM}'
+      HERMIT_PG_ALLOWED_ADDRS: ''
+      HERMIT_PG_SSLMODE: require
+      HERMIT_PG_TLS_SERVER_NAME: postgres
+      HERMIT_PG_CA_FILE: /pgcerts/ca.crt
+      HERMIT_PG_QUERY_EXEC_MODE: exec
+      HERMIT_PG_USER: hermit
+      HERMIT_PG_DATABASE: hermit
+      GOMEMLIMIT: 160MiB
+    volumes:
+      - pgcerts:/pgcerts:ro
+    ports:
+      - '127.0.0.1:18083:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer_tls:
+        condition: service_started
+      haproxy_leader:
+        condition: service_started

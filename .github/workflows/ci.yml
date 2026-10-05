@@ -136,6 +136,8 @@ jobs:
           TEST_SECOND_DATABASE_URL=postgres://hermit:hermit_dev_password@127.0.0.1:6432/hermit \
           HERMIT_ROUTING_ONLY=1 ./integration/run.sh || { cat "$RUNNER_TEMP/pgbouncer.log"; exit 1; }
       - run: docker compose config --quiet
+      - name: PgBouncer pool modes
+        run: ./integration/pgbouncer/run.sh
       - run: docker build -t hermit:ci .
       - name: Container vulnerability scan
         run: |
@@ -181,9 +183,36 @@ jobs:
           TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@postgres:5432/hermit
         run: ./integration/run.sh
 
-  fedora-rpm:
+  private-upstream-topologies:
+    name: Private upstream ${{ matrix.topology }}
     runs-on: ubuntu-latest
-    container: fedora:latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        topology: [haproxy-postgres, pgbouncer-postgres, haproxy-pgbouncer]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: integration/package-lock.json
+      - run: npm ci --prefix integration
+      - name: Neon driver against private upstream
+        run: ./integration/topology/run.sh ${{ matrix.topology }}
+
+  fedora-rpm:
+    name: Fedora RPM (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: fedora:44
     services:
       postgres:
         image: postgres:17-alpine
@@ -203,9 +232,13 @@ jobs:
         run: ./packaging/rpm/build.sh
       - name: Inspect RPM contents
         run: |
+          test "$(rpm -qp --qf '%{ARCH}' dist/hermit-*.rpm)" = '${{ matrix.arch }}'
           rpm -qpl dist/hermit-*.rpm
           rpm -qpl dist/hermit-*.rpm | grep -q '/usr/bin/hermit'
           rpm -qpl dist/hermit-*.rpm | grep -q '/hermit.service'
+          rpm -qpl dist/hermit-*.rpm | grep -q '/THIRD-PARTY-NOTICES.md'
+          rpm -qpl dist/hermit-*.rpm | grep -q '/THIRD-PARTY-LICENSES/'
+          ! rpm -qpl dist/hermit-*.rpm | grep -q '/console/'
       - name: Install and smoke-test RPM
         run: |
           dnf install -y dist/hermit-*.rpm
@@ -220,8 +253,20 @@ jobs:
         run: ./integration/release-smoke.sh /usr/bin/hermit
       - uses: actions/upload-artifact@v7
         with:
-          name: hermit-fedora-rpm
+          name: hermit-fedora-rpm-${{ matrix.arch }}
           path: dist/hermit-*.rpm
+
+  fedora-service:
+    runs-on: ubuntu-24.04-arm
+    needs: fedora-rpm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: hermit-fedora-rpm-aarch64
+          path: dist
+      - name: Verify fixed-user systemd variant
+        run: ./integration/fedora-service/run.sh dist/hermit-*.rpm
 
   release-artifacts:
     runs-on: ubuntu-latest

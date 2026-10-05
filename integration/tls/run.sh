@@ -10,6 +10,8 @@ export HERMIT_TLS_DIR="$tls_dir/certs"
 existing_hermit=$(docker compose ps -q hermit)
 
 cleanup() {
+    docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml stop hermit_ip >/dev/null 2>&1 || true
+    docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml rm -f hermit_ip >/dev/null 2>&1 || true
     docker compose -f compose.yaml -f integration/tls/compose.yaml stop haproxy >/dev/null 2>&1 || true
     docker compose -f compose.yaml -f integration/tls/compose.yaml rm -f haproxy >/dev/null 2>&1 || true
     if [ -z "$existing_hermit" ]; then
@@ -73,11 +75,24 @@ fi
 
 HERMIT_BASE_URL=https://127.0.0.1:8443 \
 NODE_EXTRA_CA_CERTS="$tls_dir/ca.crt" \
-TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit \
+TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@postgres:5432/hermit \
 node integration/pg-tls.mjs
+
+postgres_container=$(docker compose ps -q postgres)
+HERMIT_TEST_PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$postgres_container")
+if [ -z "$HERMIT_TEST_PG_IP" ]; then
+    echo 'could not find the Compose PostgreSQL container IP' >&2
+    exit 1
+fi
+export HERMIT_TEST_PG_IP
+docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml up --build -d hermit_ip
+HERMIT_BASE_URL=http://127.0.0.1:8082 \
+TEST_DATABASE_URL="postgres://hermit:hermit_dev_password@$HERMIT_TEST_PG_IP:5432/hermit" \
+node integration/pg-tls.mjs
+
 if [ "${HERMIT_TLS_SMOKE_ONLY:-}" != 1 ]; then
     HERMIT_BASE_URL=https://127.0.0.1:8443 \
     NODE_EXTRA_CA_CERTS="$tls_dir/ca.crt" \
-    TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit \
+    TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@postgres:5432/hermit \
     npm test --prefix integration
 fi

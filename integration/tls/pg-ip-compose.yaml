@@ -1,0 +1,18 @@
+services:
+  hermit_ip:
+    build: .
+    environment:
+      HERMIT_LISTEN: ':8080'
+      HERMIT_PG_ADDR: '${HERMIT_TEST_PG_IP:-127.0.0.1}:5432'
+      HERMIT_PG_TLS_SERVER_NAME: postgres
+      HERMIT_PG_SSLMODE: require
+      HERMIT_PG_CA_FILE: /pgcerts/ca.crt
+      HERMIT_PG_USER: hermit
+      HERMIT_PG_DATABASE: hermit
+    ports:
+      - '127.0.0.1:8082:8080'
+    volumes:
+      - pgcerts:/pgcerts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy

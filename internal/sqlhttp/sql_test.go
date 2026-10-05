@@ -2,8 +2,10 @@ package sqlhttp
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -16,6 +18,18 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/proddata/hermit/internal/gateway"
 )
+
+func TestDBErrorIdentifiesTLSVerificationFailure(t *testing.T) {
+	response := httptest.NewRecorder()
+	dbError(response, fmt.Errorf("connect: %w", x509.UnknownAuthorityError{}))
+	var body struct{ Message, Code string }
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 502 || body.Code != "HERMIT_UPSTREAM_TLS_VERIFICATION_FAILED" || body.Message == "" {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+}
 
 func TestConnectionConfigLocksUpstreamAndForwardsBearer(t *testing.T) {
 	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGUser: "default_user", PGDatabase: "default_db", PGSSLMode: "disable"}}
@@ -49,6 +63,26 @@ func TestConnectionConfigUsesAllowedRouteAndTLSName(t *testing.T) {
 	pgcfg, err := cfg.connectionConfig(req)
 	if err != nil || pgcfg.Host != "db.internal" || pgcfg.Port != 5432 || pgcfg.TLSConfig.ServerName != "db.internal" {
 		t.Fatalf("HTTP route = %#v, %v", pgcfg, err)
+	}
+}
+
+func TestConnectionConfigQueryExecMode(t *testing.T) {
+	for _, tc := range []struct {
+		configured string
+		want       pgx.QueryExecMode
+	}{
+		{"", pgx.QueryExecModeExec},
+		{"exec", pgx.QueryExecModeExec},
+		{"cache_describe", pgx.QueryExecModeCacheDescribe},
+		{"cache_statement", pgx.QueryExecModeCacheStatement},
+	} {
+		cfg := New(&gateway.Config{PGAddr: "postgres:5432", PGSSLMode: "disable", PGQueryExecMode: tc.configured})
+		req := httptest.NewRequest("POST", "http://localhost/sql", nil)
+		req.Header.Set("Neon-Connection-String", "postgres://app:secret@postgres:5432/app")
+		got, err := cfg.connectionConfig(req)
+		if err != nil || got.DefaultQueryExecMode != tc.want {
+			t.Fatalf("mode %q = %v, %v; want %v", tc.configured, got.DefaultQueryExecMode, err, tc.want)
+		}
 	}
 }
 func TestConnectionConfigRequiresCredential(t *testing.T) {

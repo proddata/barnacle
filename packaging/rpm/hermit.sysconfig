@@ -14,3 +14,5 @@ HERMIT_MAX_CONNECTIONS=32
 # Keep Go's garbage collector below the systemd service memory ceiling.
 GOMEMLIMIT=160MiB
 # Set HERMIT_ALLOWED_ORIGIN=https://app.example.com for a separate browser app.
+# When HAProxy is the immediate peer and sets X-Forwarded-Proto, set
+# HERMIT_TRUSTED_PROXIES to its exact source IP and restrict direct access.

@@ -95,7 +95,9 @@ test('PostgreSQL CancelRequest crosses a second WebSocket connection', async () 
   }
 });
 
-test('abrupt WebSocket disconnect releases its PostgreSQL session', async () => {
+test('abrupt WebSocket disconnect releases its PostgreSQL session', {
+  skip: process.env.HERMIT_TEST_PGBOUNCER === '1' && 'PgBouncer may retain the idle PostgreSQL backend after the client disconnects',
+}, async () => {
   const name = `hermit_ws_disconnect_${process.pid}`;
   const client = new Client(namedUrl(name));
   client.on('error', () => {}); // Expected when the test terminates its socket.

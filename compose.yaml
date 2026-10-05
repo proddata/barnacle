@@ -26,9 +26,12 @@ services:
     environment:
       HERMIT_LISTEN: ':8080'
       HERMIT_PG_ADDR: '${HERMIT_PG_ADDR-postgres:5432}'
-      #HERMIT_PG_ALLOWED_ADDRS: '${HERMIT_PG_ALLOWED_ADDRS:-}'
+      HERMIT_PG_ALLOWED_ADDRS: '${HERMIT_PG_ALLOWED_ADDRS-*}'
       HERMIT_PG_SSLMODE: require
-      HERMIT_PG_CA_FILE: /pgcerts/ca.crt
+      HERMIT_PG_QUERY_EXEC_MODE: '${HERMIT_PG_QUERY_EXEC_MODE:-exec}'
+      HERMIT_PG_TLS_SERVER_NAME: '${HERMIT_PG_TLS_SERVER_NAME:-}'
+      HERMIT_PG_CA_FILE: '${HERMIT_PG_CA_FILE:-/pgcerts/ca.crt}'
+      HERMIT_PG_EXTRA_CA_FILE: '${HERMIT_PG_EXTRA_CA_FILE:-}'
       HERMIT_PG_USER: hermit
       HERMIT_PG_DATABASE: hermit
       HERMIT_MAX_CONNECTIONS: '32'
@@ -42,6 +45,7 @@ services:
       HERMIT_HTTP_MAX_RESPONSE_MIB: '${HERMIT_HTTP_MAX_RESPONSE_MIB:-128}'
       HERMIT_OIDC_ISSUER: '${HERMIT_OIDC_ISSUER:-}'
       HERMIT_OIDC_AUDIENCE: '${HERMIT_OIDC_AUDIENCE:-}'
+      HERMIT_TRUSTED_PROXIES: '${HERMIT_TRUSTED_PROXIES:-}'
       GOMEMLIMIT: 160MiB
     mem_limit: 256m
     memswap_limit: 256m
@@ -49,6 +53,7 @@ services:
       - '127.0.0.1:8080:8080'
     volumes:
       - pgcerts:/pgcerts:ro
+      - ./console/certs:/console-certs:ro
     depends_on:
       postgres:
         condition: service_healthy

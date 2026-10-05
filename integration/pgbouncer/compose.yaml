@@ -1,0 +1,42 @@
+services:
+  pgbouncer_session:
+    build: ./integration/pgbouncer
+    environment:
+      POOL_MODE: session
+    ports:
+      - '127.0.0.1:16431:6432'
+    depends_on:
+      postgres:
+        condition: service_healthy
+  pgbouncer_transaction:
+    build: ./integration/pgbouncer
+    environment:
+      POOL_MODE: transaction
+    ports:
+      - '127.0.0.1:16432:6432'
+    depends_on:
+      postgres:
+        condition: service_healthy
+  pgbouncer_statement:
+    build: ./integration/pgbouncer
+    environment:
+      POOL_MODE: statement
+    ports:
+      - '127.0.0.1:16433:6432'
+    depends_on:
+      postgres:
+        condition: service_healthy
+  hermit_pooltest:
+    build: .
+    environment:
+      HERMIT_LISTEN: ':8080'
+      HERMIT_PG_ADDR: postgres:5432
+      HERMIT_PG_ALLOWED_ADDRS: postgres:5432,pgbouncer_session:6432,pgbouncer_transaction:6432,pgbouncer_statement:6432
+      HERMIT_PG_SSLMODE: disable
+      HERMIT_PG_QUERY_EXEC_MODE: '${HERMIT_PG_QUERY_EXEC_MODE:-exec}'
+    ports:
+      - '127.0.0.1:18080:8080'
+    depends_on:
+      - pgbouncer_session
+      - pgbouncer_transaction
+      - pgbouncer_statement

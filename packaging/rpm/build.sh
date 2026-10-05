@@ -2,6 +2,7 @@
 set -eu
 
 command -v rpmbuild >/dev/null 2>&1 || { echo 'rpmbuild is required (dnf install rpm-build systemd-rpm-macros)' >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo 'python3 is required' >&2; exit 1; }
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 version=$(awk '/^Version:/ { print $2; exit }' "$repo_dir/packaging/rpm/hermit.spec")
@@ -13,17 +14,14 @@ trap cleanup EXIT HUP INT TERM
 for dir in BUILD BUILDROOT RPMS SOURCES SPECS SRPMS; do
     mkdir -p "$build_dir/$dir"
 done
-source_dir="$build_dir/SOURCES/hermit-$version"
-mkdir -p "$source_dir/packaging/rpm"
-
 cd "$repo_dir"
-go mod download
-cp go.mod go.sum ./*.go README.md LICENSE THIRD-PARTY-NOTICES.md "$source_dir/"
-cp -R web "$source_dir/"
-cp -R internal "$source_dir/"
-cp -R THIRD-PARTY-LICENSES "$source_dir/"
-cp packaging/rpm/hermit.service packaging/rpm/hermit.sysconfig "$source_dir/packaging/rpm/"
-tar -C "$build_dir/SOURCES" -czf "$build_dir/SOURCES/hermit-$version.tar.gz" "hermit-$version"
+if [ -n "${HERMIT_SOURCE_ARCHIVE_DIR:-}" ]; then
+    cp "$HERMIT_SOURCE_ARCHIVE_DIR/hermit-$version.tar.gz" \
+       "$HERMIT_SOURCE_ARCHIVE_DIR/hermit-$version-vendor.tar.gz" "$build_dir/SOURCES/"
+else
+    python3 packaging/release/source.py
+    cp "dist/hermit-$version.tar.gz" "dist/hermit-$version-vendor.tar.gz" "$build_dir/SOURCES/"
+fi
 cp packaging/rpm/hermit.spec "$build_dir/SPECS/"
 
 rpmbuild -bb --define "_topdir $build_dir" "$build_dir/SPECS/hermit.spec"

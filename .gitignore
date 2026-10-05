@@ -1,6 +1,7 @@
 # Local build output
 /hermit
 .DS_Store
+/.env
 
 # Node integration tests: keep package.json, package-lock.json, and test source
 /integration/node_modules/

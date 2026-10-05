@@ -11,9 +11,16 @@ const pendingHTTP = [];
 neonConfig.fetchFunction = async (input, init) => {
   const body = String(init?.body ?? '');
   let query;
-  try { query = JSON.parse(body).query; } catch { /* Let fetch handle an unexpected body. */ }
+  let queries;
+  try {
+    const parsed = JSON.parse(body);
+    query = parsed.query;
+    queries = parsed.queries?.map((item) => item.query);
+  } catch { /* Let fetch handle an unexpected body. */ }
   const sentURL = new URL(String(init?.headers?.['Neon-Connection-String'] ?? 'postgres://invalid/'));
-  const capture = pendingHTTP.find((item) => !item.captured && item.bodyQuery === query &&
+  const capture = pendingHTTP.find((item) => !item.captured &&
+    (item.bodyQueries ? Array.isArray(queries) && item.bodyQueries.length === queries.length &&
+      item.bodyQueries.every((value, index) => value === queries[index]) : item.bodyQuery === query) &&
     item.url.host === sentURL.host && item.url.pathname === sentURL.pathname &&
     item.url.username === sentURL.username && item.url.password === sentURL.password);
   if (capture) {
@@ -96,7 +103,27 @@ export function safeError(error, settings) {
   return message;
 }
 
-export async function executeQuery(settings, sql, params = [], report = () => {}, purpose = 'query') {
+function resultPreview(result) {
+  return {
+    command: result.command ?? null,
+    rowCount: result.rowCount ?? result.rows?.length ?? null,
+    fields: (result.fields ?? []).map((field) => ({ name: field.name, dataTypeID: field.dataTypeID })),
+    rows: (result.rows ?? []).slice(0, 20),
+    rowsTruncated: (result.rows?.length ?? 0) > 20,
+  };
+}
+
+export async function closeQuerySession(session) {
+  const client = session?.client;
+  if (!client) return;
+  session.client = null;
+  session.url = null;
+  session.connection = null;
+  session.onChange?.();
+  await client.end().catch(() => {});
+}
+
+export async function executeQuery(settings, sql, params = [], report = () => {}, purpose = 'query', session = null) {
   const url = connectionString(settings);
   const websocket = settings.method === 'ws-password';
   const address = new URL(url);
@@ -107,12 +134,10 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
     startedAt: new Date().toLocaleTimeString(),
     durationMs: null,
     transport: websocket ? 'WebSocket' : 'HTTP',
-    api: websocket ? 'Client.connect() → Client.query() → Client.end()' : 'neon().query()',
+    api: websocket ? 'Client.connect() → Client.query()' : 'neon().query()',
     endpoint: websocket ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/v2?address=${encodeURIComponent(address.host)}` : `${location.origin}/sql`,
-    request: websocket ? {
-      startup: { user: settings.username.trim(), database: settings.database.trim(), password: '[redacted]' },
-      query: sql, params,
-    } : null,
+    request: websocket ? { query: sql, params } : null,
+    connectionReused: false,
     response: null,
   };
   report({ ...trace });
@@ -122,12 +147,52 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
   try {
     let result;
     if (websocket) {
-      const client = new Client({ connectionString: url });
+      if (session?.client && session.url !== url) await closeQuerySession(session);
+      let client = session?.client;
+      const newConnection = !client;
+      if (newConnection) {
+        client = new Client({ connectionString: url });
+        const connection = { parameters: [], backendProcessID: null };
+        const onParameterStatus = ({ parameterName, parameterValue }) => {
+          connection.parameters.push({ name: parameterName, value: parameterValue });
+        };
+        const onBackendKeyData = ({ processID }) => { connection.backendProcessID = processID; };
+        client.connection.on('parameterStatus', onParameterStatus);
+        client.connection.on('backendKeyData', onBackendKeyData);
+        const forgetClosedSession = () => {
+          if (session?.client === client) {
+            session.client = null;
+            session.url = null;
+            session.connection = null;
+            session.onChange?.();
+          }
+        };
+        client.on('error', forgetClosedSession);
+        client.on('end', forgetClosedSession);
+        try {
+          await client.connect();
+        } catch (error) {
+          await client.end().catch(() => {});
+          throw error;
+        } finally {
+          client.connection.off('parameterStatus', onParameterStatus);
+          client.connection.off('backendKeyData', onBackendKeyData);
+        }
+        if (session) {
+          session.client = client;
+          session.url = url;
+          session.connection = connection;
+          session.onChange?.();
+        }
+      } else {
+        trace.api = 'Client.query() (existing session)';
+        trace.connectionReused = true;
+      }
+      report({ ...trace });
       try {
-        await client.connect();
         result = await client.query(sql, params);
       } finally {
-        await client.end().catch(() => {});
+        if (!session) await client.end().catch(() => {});
       }
     } else {
       const query = neon(url, settings.method === 'http-bearer' ? { authToken: settings.token.trim() } : {});
@@ -135,13 +200,7 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
     }
     trace.state = 'success';
     trace.durationMs = Math.round(performance.now() - started);
-    trace.response = {
-      command: result.command ?? null,
-      rowCount: result.rowCount ?? result.rows?.length ?? null,
-      fields: (result.fields ?? []).map((field) => ({ name: field.name, dataTypeID: field.dataTypeID })),
-      rows: (result.rows ?? []).slice(0, 20),
-      rowsTruncated: (result.rows?.length ?? 0) > 20,
-    };
+    trace.response = resultPreview(result);
     report({ ...trace });
     return result;
   } catch (error) {
@@ -155,5 +214,49 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
       const index = pendingHTTP.indexOf(capture);
       if (index >= 0) pendingHTTP.splice(index, 1);
     }
+  }
+}
+
+export async function executeBatch(settings, statements, report = () => {}) {
+  if (settings.method === 'ws-password') throw new Error('Select an HTTP transport for batch queries.');
+  if (statements.length < 1 || statements.length > 100) throw new Error('An HTTP batch needs 1 to 100 statements.');
+  const url = connectionString(settings);
+  const address = new URL(url);
+  const trace = {
+    id: ++nextTraceId,
+    purpose: 'batch',
+    state: 'running',
+    startedAt: new Date().toLocaleTimeString(),
+    durationMs: null,
+    transport: 'HTTP',
+    api: 'neon().transaction()',
+    endpoint: `${location.origin}/sql`,
+    request: null,
+    response: null,
+  };
+  report({ ...trace });
+  const capture = { bodyQueries: statements, url: address, trace, report, captured: false };
+  pendingHTTP.push(capture);
+  const started = performance.now();
+  try {
+    const query = neon(url, settings.method === 'http-bearer' ? { authToken: settings.token.trim() } : {});
+    const results = await query.transaction(
+      statements.map((sql) => query.query(sql, [], { fullResults: true })),
+      { fullResults: true },
+    );
+    trace.state = 'success';
+    trace.durationMs = Math.round(performance.now() - started);
+    trace.response = { results: results.map(resultPreview) };
+    report({ ...trace });
+    return results;
+  } catch (error) {
+    trace.state = 'error';
+    trace.durationMs = Math.round(performance.now() - started);
+    trace.response = { error: safeError(error, settings), code: error?.code ?? null };
+    report({ ...trace });
+    throw error;
+  } finally {
+    const index = pendingHTTP.indexOf(capture);
+    if (index >= 0) pendingHTTP.splice(index, 1);
   }
 }

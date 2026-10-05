@@ -2,13 +2,17 @@ package gateway
 
 import (
 	"crypto/x509"
+	"net/netip"
 	"time"
 )
 
 type Config struct {
-	Listen, PGAddr, ReadyPGAddr, AllowedOrigin                  string
-	PGDatabase, PGUser, PGPassword, PGSSLMode                   string
+	Listen, PGAddr, ReadyPGAddr                                 string
+	PGDatabase, PGUser, PGPassword, PGSSLMode, PGTLSServerName  string
+	PGQueryExecMode                                             string
 	PGAllowedAddrs                                              map[string]struct{}
+	AllowedOrigins                                              map[string]struct{}
+	TrustedProxies                                              []netip.Prefix
 	PGRootCAs                                                   *x509.CertPool
 	QueryTimeout, WSIdleTimeout, WSWriteTimeout                 time.Duration
 	UpstreamSlots, CancelSlots, HTTPSlots, ReadySlots           chan struct{}
