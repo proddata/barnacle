@@ -149,7 +149,7 @@ jobs:
         run: |
           trap 'docker compose down' EXIT
           docker compose up --build -d
-          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit node integration/pg-tls.mjs
+          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@postgres:5432/hermit node integration/pg-tls.mjs
       - name: HTTPS and WSS through HAProxy
         run: ./integration/tls/run.sh
 

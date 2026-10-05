@@ -6,7 +6,7 @@ import WebSocket from 'ws';
 const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
 const endpoint = new URL(base);
 const databaseUrl = process.env.TEST_DATABASE_URL ||
-  'postgres://hermit:hermit_dev_password@localhost:5432/hermit';
+  'postgres://hermit:hermit_dev_password@postgres:5432/hermit';
 if (process.env.HERMIT_TEST_PG_IP) {
   assert.equal(isIP(new URL(databaseUrl).hostname), 4, 'TLS server-name test must route to a PostgreSQL IPv4 address');
 }
