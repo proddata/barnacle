@@ -1,5 +1,8 @@
 # Restrict this listener to a local ingress by default.
 BARNACLE_LISTEN=127.0.0.1:8080
+# To serve HTTPS/WSS directly, set both paths to a matching PEM pair.
+# BARNACLE_TLS_CERT_FILE=/etc/barnacle/server.crt
+# BARNACLE_TLS_KEY_FILE=/etc/barnacle/server.key
 BARNACLE_PG_ADDR=127.0.0.1:5432
 BARNACLE_PG_SSLMODE=require
 # BARNACLE_PG_CA_FILE=/etc/barnacle/pg-ca.pem

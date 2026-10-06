@@ -17,7 +17,7 @@ Choose the layout that matches where Barnacle runs:
 
 For example, with `BARNACLE_PG_ALLOWED_ADDRS=postgres:5432,pgbouncer:6432` and `BARNACLE_PG_ADDR=pgbouncer:6432`, an HTTP connection string naming `postgres:5432` uses the direct path, `/v2?address=postgres:5432` does the same, and a WebSocket without `?address=` uses the pooler. The local Compose file supplies `BARNACLE_PG_ADDR=postgres:5432` unless you set `BARNACLE_PG_ADDR=` explicitly.
 
-Put an HTTPS/WSS ingress in front of Barnacle and keep PostgreSQL and pooler listeners private. The supplied [HAProxy example](../haproxy.cfg) shows TLS termination for Barnacle.
+Put an HTTPS/WSS ingress in front of Barnacle, or configure Barnacle to serve HTTPS/WSS directly with `BARNACLE_TLS_CERT_FILE` and `BARNACLE_TLS_KEY_FILE`. Keep PostgreSQL and pooler listeners private. The supplied [HAProxy example](../haproxy.cfg) shows ingress TLS termination.
 
 ## One PostgreSQL instance
 
@@ -97,7 +97,7 @@ The requested address must match an allowlist entry exactly, including its port;
 
 ### TLS on each connection
 
-- **Client to ingress:** use HTTPS and WSS. The [HAProxy example](../haproxy.cfg) terminates this TLS connection. Barnacle itself listens on HTTP/WS, so keep the ingress-to-Barnacle hop private and restrict direct access. If that hop crosses an untrusted network, terminate TLS again beside Barnacle or use an encrypted network tunnel.
+- **Client to Barnacle:** use HTTPS and WSS. The [HAProxy example](../haproxy.cfg) terminates TLS at an ingress. Alternatively, set both `BARNACLE_TLS_CERT_FILE` and `BARNACLE_TLS_KEY_FILE` to PEM files to serve HTTPS/WSS directly on `BARNACLE_LISTEN`. Barnacle refuses to start if only one is set or the pair cannot be loaded. With neither set, the listener serves HTTP/WS; keep any ingress-to-Barnacle hop private or encrypt it separately.
 - **Barnacle to PostgreSQL or pooler:** keep `BARNACLE_PG_SSLMODE=require` when traversing a network. Barnacle verifies the certificate chain and the destination hostname, like libpq's [`verify-full`](https://www.postgresql.org/docs/current/libpq-ssl.html); this is stricter than libpq's `require`. Use a DNS name on the certificate and provide its CA through `BARNACLE_PG_CA_FILE` or `BARNACLE_PG_EXTRA_CA_FILE` if it is not already trusted. `disable` is available for a trusted local hop, such as loopback.
 - **Pooler to PostgreSQL:** configure this separately. For PgBouncer, use [`server_tls_sslmode=verify-full` and `server_tls_ca_file`](https://www.pgbouncer.org/config.html); Barnacle's settings protect only its connection to the pooler. On the Barnacle-facing side, configure PgBouncer's `client_tls_sslmode=require` and a certificate and key for the name Barnacle dials.
 - **Several routed instances:** each certificate must match its allowlisted DNS name. `BARNACLE_PG_TLS_SERVER_NAME` overrides the verification name for **every** route; leave it empty when routes have different names. Separate Barnacle instances are needed when routes require different TLS modes or a shared name override is unsuitable. Barnacle has no upstream client-certificate setting, so an upstream requiring mutual TLS client authentication needs a different arrangement.
@@ -108,7 +108,7 @@ The local [Compose stack](../compose.yaml) uses `BARNACLE_PG_ALLOWED_ADDRS=*` on
 
 ## Ingress, browser access, and operations
 
-- Terminate HTTPS/WSS at the ingress and keep Barnacle's own listener private. Preserve the public `Host`. If the ingress sets `X-Forwarded-Proto`, set `BARNACLE_TRUSTED_PROXIES` to its immediate source IP or CIDR; Barnacle ignores that header from other peers. For a separate browser frontend, set exact origins in `BARNACLE_ALLOWED_ORIGIN`.
+- Terminate HTTPS/WSS at the ingress or enable Barnacle's direct TLS listener. Preserve the public `Host` when using an ingress. If the ingress sets `X-Forwarded-Proto`, set `BARNACLE_TRUSTED_PROXIES` to its immediate source IP or CIDR; Barnacle ignores that header from other peers. For a separate browser frontend, set exact origins in `BARNACLE_ALLOWED_ORIGIN`.
 - Keep credentials in connection strings and bearer tokens out of access logs. The optional console is a development service, not part of a production deployment.
 - Metrics are off unless `BARNACLE_METRICS=true`. When enabled, `/metrics` listens on `127.0.0.1:9090` by default, separate from client traffic. The main listener returns `404` for `/metrics`, and the metrics listener serves no other routes.
 - The metrics endpoint has no authentication. For a remote scraper, set `BARNACLE_METRICS_LISTEN` to a private interface and restrict access with a firewall or private ingress. The supplied HAProxy example also returns `404` for public `/metrics` requests.
@@ -124,7 +124,9 @@ The development Compose file passes these settings from shell variables or `.env
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `BARNACLE_LISTEN` | `:8080` | HTTP and WebSocket listen address |
+| `BARNACLE_LISTEN` | `:8080` | HTTP/WS or HTTPS/WSS listen address |
+| `BARNACLE_TLS_CERT_FILE` | empty | PEM certificate chain for optional direct HTTPS/WSS; set with key file |
+| `BARNACLE_TLS_KEY_FILE` | empty | Matching PEM private key for optional direct HTTPS/WSS; set with certificate file |
 | `BARNACLE_PG_ADDR` | `127.0.0.1:5432` in fixed mode; unset in routing mode | Fixed destination or optional allowlisted fallback |
 | `BARNACLE_PG_ALLOWED_ADDRS` | empty | Allow exact `host:port` routes; `*` permits any destination and is used by local Compose |
 | `BARNACLE_PG_SSLMODE` | `require` | Verified upstream TLS; `disable` permits plaintext on a trusted local network |
@@ -150,6 +152,8 @@ The development Compose file passes these settings from shell variables or `.env
 | `BARNACLE_OIDC_AUDIENCE` | empty | Required resource audience when the gate is enabled |
 | `BARNACLE_ALLOWED_ORIGIN` | empty | Comma-separated exact browser origins |
 | `BARNACLE_TRUSTED_PROXIES` | empty | Immediate reverse-proxy IPs or CIDRs allowed to set `X-Forwarded-Proto` |
+
+For direct TLS, point the two file settings at a certificate valid for the public DNS name and its private key, then use `https://` and `wss://` URLs. The files must be readable by the Barnacle process when it starts. Barnacle checks both files every minute and uses a changed, matching pair for new connections without a restart. If a rotation temporarily leaves the files missing or mismatched, new connections continue with the last working pair and Barnacle logs the reload failure. Existing connections keep their established TLS session. TLS settings apply to the main listener only; a separate metrics listener stays HTTP and should remain private.
 
 `BARNACLE_QUERY_TIMEOUT` covers a whole HTTP batch, not each statement. `BARNACLE_HTTP_WRITE_TIMEOUT` must leave time to send the response after query work. WebSocket sessions have no whole-session deadline; their idle and per-write limits apply after upgrade. Set PostgreSQL's own `statement_timeout` for database-side query limits.
 
