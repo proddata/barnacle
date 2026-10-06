@@ -1,3 +1,5 @@
+name: barnacle
+
 services:
   pgcertgen:
     build: ./integration/pgcertgen
@@ -6,12 +8,12 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: hermit
-      POSTGRES_PASSWORD: hermit_dev_password
-      POSTGRES_DB: hermit
+      POSTGRES_USER: barnacle
+      POSTGRES_PASSWORD: barnacle_dev_password
+      POSTGRES_DB: barnacle
     command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/pgcerts/server.crt", "-c", "ssl_key_file=/pgcerts/server.key"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hermit -d hermit"]
+      test: ["CMD-SHELL", "pg_isready -U barnacle -d barnacle"]
       interval: 2s
       timeout: 2s
       retries: 15
@@ -21,31 +23,31 @@ services:
     depends_on:
       pgcertgen:
         condition: service_completed_successfully
-  hermit:
+  barnacle:
     build: .
     environment:
-      HERMIT_LISTEN: ':8080'
-      HERMIT_PG_ADDR: '${HERMIT_PG_ADDR-postgres:5432}'
-      HERMIT_PG_ALLOWED_ADDRS: '${HERMIT_PG_ALLOWED_ADDRS-*}'
-      HERMIT_PG_SSLMODE: require
-      HERMIT_PG_QUERY_EXEC_MODE: '${HERMIT_PG_QUERY_EXEC_MODE:-exec}'
-      HERMIT_PG_TLS_SERVER_NAME: '${HERMIT_PG_TLS_SERVER_NAME:-}'
-      HERMIT_PG_CA_FILE: '${HERMIT_PG_CA_FILE:-/pgcerts/ca.crt}'
-      HERMIT_PG_EXTRA_CA_FILE: '${HERMIT_PG_EXTRA_CA_FILE:-}'
-      HERMIT_PG_USER: hermit
-      HERMIT_PG_DATABASE: hermit
-      HERMIT_MAX_CONNECTIONS: '32'
-      HERMIT_MAX_HTTP_QUERIES: '${HERMIT_MAX_HTTP_QUERIES:-8}'
-      HERMIT_WS_IDLE_TIMEOUT: '${HERMIT_WS_IDLE_TIMEOUT:-30m}'
-      HERMIT_WS_WRITE_TIMEOUT: '${HERMIT_WS_WRITE_TIMEOUT:-30s}'
-      HERMIT_READY_PG_ADDR: '${HERMIT_READY_PG_ADDR:-}'
-      HERMIT_METRICS: '${HERMIT_METRICS:-false}'
-      HERMIT_HTTP_MAX_ROW_MIB: '${HERMIT_HTTP_MAX_ROW_MIB:-8}'
-      HERMIT_HTTP_MAX_BUFFERED_MIB: '${HERMIT_HTTP_MAX_BUFFERED_MIB:-4}'
-      HERMIT_HTTP_MAX_RESPONSE_MIB: '${HERMIT_HTTP_MAX_RESPONSE_MIB:-128}'
-      HERMIT_OIDC_ISSUER: '${HERMIT_OIDC_ISSUER:-}'
-      HERMIT_OIDC_AUDIENCE: '${HERMIT_OIDC_AUDIENCE:-}'
-      HERMIT_TRUSTED_PROXIES: '${HERMIT_TRUSTED_PROXIES:-}'
+      BARNACLE_LISTEN: ':8080'
+      BARNACLE_PG_ADDR: '${BARNACLE_PG_ADDR-postgres:5432}'
+      BARNACLE_PG_ALLOWED_ADDRS: '${BARNACLE_PG_ALLOWED_ADDRS-*}'
+      BARNACLE_PG_SSLMODE: require
+      BARNACLE_PG_QUERY_EXEC_MODE: '${BARNACLE_PG_QUERY_EXEC_MODE:-exec}'
+      BARNACLE_PG_TLS_SERVER_NAME: '${BARNACLE_PG_TLS_SERVER_NAME:-}'
+      BARNACLE_PG_CA_FILE: '${BARNACLE_PG_CA_FILE:-/pgcerts/ca.crt}'
+      BARNACLE_PG_EXTRA_CA_FILE: '${BARNACLE_PG_EXTRA_CA_FILE:-}'
+      BARNACLE_PG_USER: barnacle
+      BARNACLE_PG_DATABASE: barnacle
+      BARNACLE_MAX_CONNECTIONS: '32'
+      BARNACLE_MAX_HTTP_QUERIES: '${BARNACLE_MAX_HTTP_QUERIES:-8}'
+      BARNACLE_WS_IDLE_TIMEOUT: '${BARNACLE_WS_IDLE_TIMEOUT:-30m}'
+      BARNACLE_WS_WRITE_TIMEOUT: '${BARNACLE_WS_WRITE_TIMEOUT:-30s}'
+      BARNACLE_READY_PG_ADDR: '${BARNACLE_READY_PG_ADDR:-}'
+      BARNACLE_METRICS: '${BARNACLE_METRICS:-false}'
+      BARNACLE_HTTP_MAX_ROW_MIB: '${BARNACLE_HTTP_MAX_ROW_MIB:-8}'
+      BARNACLE_HTTP_MAX_BUFFERED_MIB: '${BARNACLE_HTTP_MAX_BUFFERED_MIB:-4}'
+      BARNACLE_HTTP_MAX_RESPONSE_MIB: '${BARNACLE_HTTP_MAX_RESPONSE_MIB:-128}'
+      BARNACLE_OIDC_ISSUER: '${BARNACLE_OIDC_ISSUER:-}'
+      BARNACLE_OIDC_AUDIENCE: '${BARNACLE_OIDC_AUDIENCE:-}'
+      BARNACLE_TRUSTED_PROXIES: '${BARNACLE_TRUSTED_PROXIES:-}'
       GOMEMLIMIT: 160MiB
     mem_limit: 256m
     memswap_limit: 256m
@@ -63,7 +65,7 @@ services:
     ports:
       - '127.0.0.1:8081:80'
     depends_on:
-      hermit:
+      barnacle:
         condition: service_started
 volumes:
   pgdata:

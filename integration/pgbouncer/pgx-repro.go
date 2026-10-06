@@ -14,7 +14,7 @@ import (
 
 func main() {
 	for mode, port := range map[string]int{"session": 16431, "transaction": 16432, "statement": 16433} {
-		url := fmt.Sprintf("postgres://hermit:hermit_dev_password@127.0.0.1:%d/hermit?sslmode=disable", port)
+		url := fmt.Sprintf("postgres://barnacle:barnacle_dev_password@127.0.0.1:%d/barnacle?sslmode=disable", port)
 		cfg, err := pgx.ParseConfig(url)
 		if err != nil {
 			panic(err)

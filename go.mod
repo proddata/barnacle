@@ -1,4 +1,4 @@
-module github.com/proddata/hermit
+module github.com/proddata/barnacle
 
 go 1.25.14
 

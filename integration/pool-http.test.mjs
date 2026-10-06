@@ -4,7 +4,7 @@ import { Pool, neonConfig } from '@neondatabase/serverless';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL for the integration suite');
-const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
+const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080';
 
 test('Neon Pool.query uses HTTP and preserves node-postgres result options', async () => {
   const previous = {

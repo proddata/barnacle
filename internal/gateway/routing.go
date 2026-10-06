@@ -37,11 +37,11 @@ func ParseAllowedPGAddrs(raw string) (map[string]struct{}, error) {
 	allowed := make(map[string]struct{})
 	for _, entry := range strings.Split(raw, ",") {
 		if strings.TrimSpace(entry) == "*" {
-			return nil, errors.New("HERMIT_PG_ALLOWED_ADDRS must use * alone")
+			return nil, errors.New("BARNACLE_PG_ALLOWED_ADDRS must use * alone")
 		}
 		addr, err := CanonicalPGAddr(strings.TrimSpace(entry))
 		if err != nil {
-			return nil, fmt.Errorf("invalid HERMIT_PG_ALLOWED_ADDRS entry %q: %w", entry, err)
+			return nil, fmt.Errorf("invalid BARNACLE_PG_ALLOWED_ADDRS entry %q: %w", entry, err)
 		}
 		allowed[addr] = struct{}{}
 	}

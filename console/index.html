@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#111b23">
-  <title>Hermit SQL Console</title>
+  <title>Barnacle Development Console</title>
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><div><strong>HERMIT</strong><span>SQL CONSOLE</span></div></div>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><div><strong>BARNACLE</strong><span>DEV CONSOLE</span></div></div>
       <div class="top-actions">
         <button id="toggle-connection" class="subtle-button" type="button" aria-expanded="true" aria-controls="connection-panel">Connection <span aria-hidden="true">⌄</span></button>
         <span id="connection-badge" class="connection-badge"><span class="status-dot"></span> Not connected</span>
@@ -29,9 +29,9 @@
       <div class="connection-fields">
         <label>Name <input id="connection-name" value="Local development" autocomplete="off"></label>
         <label>Host <input id="host" value="postgres:5432" spellcheck="false" autocomplete="off" placeholder="postgres:5432"></label>
-        <label>Database <input id="database" value="hermit" spellcheck="false" autocomplete="off"></label>
-        <label>User <input id="username" value="hermit" spellcheck="false" autocomplete="off"></label>
-        <label id="password-field">Password <input id="password" type="password" value="hermit_dev_password" autocomplete="off"></label>
+        <label>Database <input id="database" value="barnacle" spellcheck="false" autocomplete="off"></label>
+        <label>User <input id="username" value="barnacle" spellcheck="false" autocomplete="off"></label>
+        <label id="password-field">Password <input id="password" type="password" value="barnacle_dev_password" autocomplete="off"></label>
         <label id="token-field" hidden>Bearer token <input id="token" type="password" autocomplete="off"></label>
         <label>Transport
           <select id="method">
@@ -51,7 +51,13 @@
           </select>
         </label>
       </div>
-      <div class="connection-hint">Enter a PostgreSQL host:port. Local Compose allows external hosts; other deployments may restrict them. The Compose development password is prefilled for local testing.</div>
+      <div id="session-controls" class="session-controls" hidden>
+        <span class="session-label">Active tab WebSocket</span>
+        <span id="startup-state" class="session-state" role="status">Disconnected</span>
+        <button id="connect-session" class="subtle-button compact" type="button">Connect</button>
+        <button id="disconnect-session" class="subtle-button compact" type="button" disabled>Disconnect</button>
+      </div>
+      <div class="connection-hint"><strong>Development and debugging only. Do not deploy this console in production.</strong> Enter a PostgreSQL host:port. Local Compose allows external hosts; other deployments may restrict them. The Compose development password is prefilled for local testing.</div>
     </section>
 
     <div id="workbench" class="workbench">
@@ -60,7 +66,7 @@
         <div class="explorer-search"><span aria-hidden="true">⌕</span><input id="tree-filter" type="search" placeholder="Filter tables" aria-label="Filter tables"></div>
         <div id="schema-tree" class="schema-tree"><p class="empty-note">Enter a password, then refresh to browse tables.</p></div>
         <section class="startup-panel" aria-labelledby="startup-heading">
-          <div class="startup-heading"><div><span class="eyebrow">SESSION</span><h3 id="startup-heading">Server startup</h3></div><span id="startup-state">No session</span></div>
+          <div class="startup-heading"><div><span class="eyebrow">SESSION</span><h3 id="startup-heading">Server startup</h3></div></div>
           <div id="startup-details" class="startup-details"><p class="startup-empty">Run a query over WebSocket to see the server's startup parameters.</p></div>
         </section>
         <div class="panel-footnote">Click a table to preview rows. Expand it to inspect columns.</div>
@@ -100,7 +106,7 @@
       </aside>
     </div>
 
-    <footer class="statusbar"><span id="status-message">Ready</span><span id="status-meta">PostgreSQL via Hermit</span></footer>
+    <footer class="statusbar"><span id="status-message">Ready</span><span id="status-meta">PostgreSQL via Barnacle</span></footer>
   </div>
   <script type="module" src="/src/app.js"></script>
 </body>

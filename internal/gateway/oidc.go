@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const oidcCookieName = "hermit_access_token"
+const oidcCookieName = "barnacle_access_token"
 
 var ErrInvalidToken = errors.New("invalid access token")
 
@@ -290,7 +290,7 @@ func (c Config) AuthorizeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	_ = json.NewEncoder(w).Encode(map[string]any{"message": ErrInvalidToken.Error(), "code": "HERMIT_ERROR"})
+	_ = json.NewEncoder(w).Encode(map[string]any{"message": ErrInvalidToken.Error(), "code": "BARNACLE_ERROR"})
 	return false
 }
 

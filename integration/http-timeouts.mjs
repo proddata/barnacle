@@ -4,8 +4,8 @@ import { createConnection, createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
 
-const binary = process.env.HERMIT_TIMEOUT_BINARY;
-if (!binary) throw new Error('Set HERMIT_TIMEOUT_BINARY');
+const binary = process.env.BARNACLE_TIMEOUT_BINARY;
+if (!binary) throw new Error('Set BARNACLE_TIMEOUT_BINARY');
 
 async function listen(server) {
   await new Promise((resolve, reject) => {
@@ -42,15 +42,15 @@ const base = `http://127.0.0.1:${port}`;
 const child = spawn(binary, [], {
   env: {
     ...process.env,
-    HERMIT_LISTEN: `127.0.0.1:${port}`,
-    HERMIT_PG_ADDR: `127.0.0.1:${backendPort}`,
-    HERMIT_PG_SSLMODE: 'disable',
-    HERMIT_HTTP_READ_TIMEOUT: '350ms',
-    HERMIT_HTTP_WRITE_TIMEOUT: '2s',
-    HERMIT_HTTP_IDLE_TIMEOUT: '350ms',
-    HERMIT_WS_IDLE_TIMEOUT: '5s',
-    HERMIT_OIDC_ISSUER: '',
-    HERMIT_OIDC_AUDIENCE: '',
+    BARNACLE_LISTEN: `127.0.0.1:${port}`,
+    BARNACLE_PG_ADDR: `127.0.0.1:${backendPort}`,
+    BARNACLE_PG_SSLMODE: 'disable',
+    BARNACLE_HTTP_READ_TIMEOUT: '350ms',
+    BARNACLE_HTTP_WRITE_TIMEOUT: '2s',
+    BARNACLE_HTTP_IDLE_TIMEOUT: '350ms',
+    BARNACLE_WS_IDLE_TIMEOUT: '5s',
+    BARNACLE_OIDC_ISSUER: '',
+    BARNACLE_OIDC_AUDIENCE: '',
   },
   stdio: ['ignore', 'ignore', 'pipe'],
 });
@@ -88,7 +88,7 @@ try {
     } catch { /* Listener is starting. */ }
     await delay(50);
   }
-  assert.ok(ready, `Hermit did not start: ${stderr}`);
+  assert.ok(ready, `Barnacle did not start: ${stderr}`);
 
   const slowBody = await requestUntilClosed(
     `POST /sql HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 100\r\nContent-Type: application/json\r\n\r\n{`,
@@ -124,7 +124,7 @@ try {
   console.log('Slow HTTP body and idle keep-alive expired; WebSocket stayed active past HTTP deadlines');
 } finally {
   child.kill('SIGTERM');
-  await within(exited, 'Hermit exit').catch(() => child.kill('SIGKILL'));
+  await within(exited, 'Barnacle exit').catch(() => child.kill('SIGKILL'));
   for (const socket of backendSockets) socket.destroy();
   await close(backend);
 }
@@ -140,14 +140,14 @@ const slowBase = `http://127.0.0.1:${slowPort}`;
 const slowChild = spawn(binary, [], {
   env: {
     ...process.env,
-    HERMIT_LISTEN: `127.0.0.1:${slowPort}`,
-    HERMIT_HTTP_WRITE_TIMEOUT: '500ms',
-    HERMIT_QUERY_TIMEOUT: '5s',
-    HERMIT_MAX_HTTP_QUERIES: '1',
-    HERMIT_MAX_CONNECTIONS: '2',
-    HERMIT_METRICS: 'true',
-    HERMIT_OIDC_ISSUER: '',
-    HERMIT_OIDC_AUDIENCE: '',
+    BARNACLE_LISTEN: `127.0.0.1:${slowPort}`,
+    BARNACLE_HTTP_WRITE_TIMEOUT: '500ms',
+    BARNACLE_QUERY_TIMEOUT: '5s',
+    BARNACLE_MAX_HTTP_QUERIES: '1',
+    BARNACLE_MAX_CONNECTIONS: '2',
+    BARNACLE_METRICS: 'true',
+    BARNACLE_OIDC_ISSUER: '',
+    BARNACLE_OIDC_AUDIENCE: '',
   },
   stdio: ['ignore', 'ignore', 'pipe'],
 });
@@ -177,7 +177,7 @@ try {
 
   await delay(1200);
   const metrics = await within(fetch(`${slowBase}/metrics`).then((response) => response.text()), 'slow reader metrics');
-  assert.match(metrics, /hermit_sql_requests_total 1\n/, `stalled response did not finish: ${metrics}`);
+  assert.match(metrics, /barnacle_sql_requests_total 1\n/, `stalled response did not finish: ${metrics}`);
   const probe = await within(fetch(`${slowBase}/sql`, {
     method: 'POST',
     headers: { 'Neon-Connection-String': databaseUrl },
@@ -188,5 +188,5 @@ try {
 } finally {
   stalled?.destroy();
   slowChild.kill('SIGTERM');
-  await within(slowExited, 'slow-reader Hermit exit').catch(() => slowChild.kill('SIGKILL'));
+  await within(slowExited, 'slow-reader Barnacle exit').catch(() => slowChild.kill('SIGKILL'));
 }

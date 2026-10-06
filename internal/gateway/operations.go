@@ -87,16 +87,16 @@ func (m *Metrics) MeasureSQL(next http.HandlerFunc) http.HandlerFunc {
 
 func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	_, _ = fmt.Fprintf(w, "# TYPE hermit_websocket_active gauge\nhermit_websocket_active %d\n", m.websocketActive.Load())
-	_, _ = fmt.Fprintf(w, "# TYPE hermit_sql_requests_total counter\nhermit_sql_requests_total %d\n", m.sqlRequests.Load())
-	_, _ = fmt.Fprintf(w, "# TYPE hermit_sql_errors_total counter\nhermit_sql_errors_total %d\n", m.sqlErrors.Load())
-	_, _ = fmt.Fprintf(w, "# TYPE hermit_limit_rejections_total counter\nhermit_limit_rejections_total{limit=\"http_queries\"} %d\nhermit_limit_rejections_total{limit=\"upstream_connections\"} %d\n", m.httpLimitRejects.Load(), m.upstreamRejects.Load())
-	_, _ = fmt.Fprintf(w, "# TYPE hermit_upstream_connection_failures_total counter\nhermit_upstream_connection_failures_total %d\n", m.upstreamFailures.Load())
-	_, _ = fmt.Fprintln(w, "# TYPE hermit_sql_duration_seconds histogram")
+	_, _ = fmt.Fprintf(w, "# TYPE barnacle_websocket_active gauge\nbarnacle_websocket_active %d\n", m.websocketActive.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE barnacle_sql_requests_total counter\nbarnacle_sql_requests_total %d\n", m.sqlRequests.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE barnacle_sql_errors_total counter\nbarnacle_sql_errors_total %d\n", m.sqlErrors.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE barnacle_limit_rejections_total counter\nbarnacle_limit_rejections_total{limit=\"http_queries\"} %d\nbarnacle_limit_rejections_total{limit=\"upstream_connections\"} %d\n", m.httpLimitRejects.Load(), m.upstreamRejects.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE barnacle_upstream_connection_failures_total counter\nbarnacle_upstream_connection_failures_total %d\n", m.upstreamFailures.Load())
+	_, _ = fmt.Fprintln(w, "# TYPE barnacle_sql_duration_seconds histogram")
 	for i, label := range [...]string{"0.01", "0.05", "0.1", "0.5", "1", "5"} {
-		_, _ = fmt.Fprintf(w, "hermit_sql_duration_seconds_bucket{le=%q} %d\n", label, m.sqlLatency[i].Load())
+		_, _ = fmt.Fprintf(w, "barnacle_sql_duration_seconds_bucket{le=%q} %d\n", label, m.sqlLatency[i].Load())
 	}
-	_, _ = fmt.Fprintf(w, "hermit_sql_duration_seconds_bucket{le=\"+Inf\"} %d\nhermit_sql_duration_seconds_sum %.9f\nhermit_sql_duration_seconds_count %d\n", m.sqlRequests.Load(), float64(m.sqlDurationNS.Load())/1e9, m.sqlRequests.Load())
+	_, _ = fmt.Fprintf(w, "barnacle_sql_duration_seconds_bucket{le=\"+Inf\"} %d\nbarnacle_sql_duration_seconds_sum %.9f\nbarnacle_sql_duration_seconds_count %d\n", m.sqlRequests.Load(), float64(m.sqlDurationNS.Load())/1e9, m.sqlRequests.Load())
 }
 
 func (c Config) Ready(w http.ResponseWriter, _ *http.Request) {

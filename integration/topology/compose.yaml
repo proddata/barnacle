@@ -19,18 +19,18 @@ services:
         condition: service_healthy
       pgbouncer_tls:
         condition: service_started
-  hermit_topology:
+  barnacle_topology:
     build: .
     environment:
-      HERMIT_LISTEN: ':8080'
-      HERMIT_PG_ADDR: '${T11_UPSTREAM:?set T11_UPSTREAM}'
-      HERMIT_PG_ALLOWED_ADDRS: ''
-      HERMIT_PG_SSLMODE: require
-      HERMIT_PG_TLS_SERVER_NAME: postgres
-      HERMIT_PG_CA_FILE: /pgcerts/ca.crt
-      HERMIT_PG_QUERY_EXEC_MODE: exec
-      HERMIT_PG_USER: hermit
-      HERMIT_PG_DATABASE: hermit
+      BARNACLE_LISTEN: ':8080'
+      BARNACLE_PG_ADDR: '${T11_UPSTREAM:?set T11_UPSTREAM}'
+      BARNACLE_PG_ALLOWED_ADDRS: ''
+      BARNACLE_PG_SSLMODE: require
+      BARNACLE_PG_TLS_SERVER_NAME: postgres
+      BARNACLE_PG_CA_FILE: /pgcerts/ca.crt
+      BARNACLE_PG_QUERY_EXEC_MODE: exec
+      BARNACLE_PG_USER: barnacle
+      BARNACLE_PG_DATABASE: barnacle
       GOMEMLIMIT: 160MiB
     volumes:
       - pgcerts:/pgcerts:ro

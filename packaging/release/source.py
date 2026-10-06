@@ -14,7 +14,7 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "dist"
-SPEC = ROOT / "packaging/rpm/hermit.spec"
+SPEC = ROOT / "packaging/rpm/barnacle.spec"
 match = re.search(r"^Version:\s+(\S+)", SPEC.read_text(), re.MULTILINE)
 if not match:
     raise SystemExit("RPM spec has no Version")
@@ -72,15 +72,15 @@ def write_archive(path, tree, prefix):
             output.write(struct.pack("<II", checksum, size))
 
 
-with tempfile.TemporaryDirectory(prefix="hermit-source-") as temporary:
+with tempfile.TemporaryDirectory(prefix="barnacle-source-") as temporary:
     temp = Path(temporary)
-    source = temp / f"hermit-{VERSION}"
+    source = temp / f"barnacle-{VERSION}"
     source.mkdir()
     files = [
         "go.mod", "go.sum", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md",
         *[item.name for item in sorted(ROOT.glob("*.go"))],
-        "packaging/rpm/hermit.spec", "packaging/rpm/hermit.service",
-        "packaging/rpm/hermit.sysconfig", "packaging/rpm/hermit-key-access.conf",
+        "packaging/rpm/barnacle.spec", "packaging/rpm/barnacle.service",
+        "packaging/rpm/barnacle.sysconfig", "packaging/rpm/barnacle-key-access.conf",
     ]
     for name in files:
         target = source / name
@@ -98,6 +98,6 @@ with tempfile.TemporaryDirectory(prefix="hermit-source-") as temporary:
     subprocess.run(["go", "mod", "vendor", "-o", str(vendor)], cwd=source, env=environment, check=True)
 
     DIST.mkdir(exist_ok=True)
-    write_archive(DIST / f"hermit-{VERSION}.tar.gz", source, source.name)
-    write_archive(DIST / f"hermit-{VERSION}-vendor.tar.gz", vendor, "vendor")
+    write_archive(DIST / f"barnacle-{VERSION}.tar.gz", source, source.name)
+    write_archive(DIST / f"barnacle-{VERSION}-vendor.tar.gz", vendor, "vendor")
     print(f"Source and vendor archives written to {DIST}")

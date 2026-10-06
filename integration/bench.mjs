@@ -24,9 +24,9 @@ if (!['http', 'ws'].includes(transport) || !['docker', 'systemd'].includes(memor
   throw new Error('Use --transport=http|ws --connections=N --qps=N --seconds=N [--payload-bytes=N] [--sleep-ms=N] [--memory-source=docker|systemd]');
 }
 
-const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
+const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080';
 const databaseUrl = process.env.TEST_DATABASE_URL ||
-  'postgres://hermit:hermit_dev_password@localhost:5432/hermit';
+  'postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle';
 const endpoint = new URL(base);
 neonConfig.fetchEndpoint = `${base}/sql`;
 neonConfig.webSocketConstructor = WebSocket;
@@ -37,7 +37,7 @@ neonConfig.forceDisablePgSSL = true;
 
 let containerId;
 if (memorySource === 'docker') {
-  const { stdout: idOutput } = await exec('docker', ['compose', 'ps', '-q', 'hermit'], { cwd: root });
+  const { stdout: idOutput } = await exec('docker', ['compose', 'ps', '-q', 'barnacle'], { cwd: root });
   containerId = idOutput.trim();
   if (!containerId) throw new Error('Start the Compose stack first: docker compose up --build -d');
 }
@@ -53,9 +53,9 @@ function bytesFromDocker(value) {
 async function containerMemory() {
   if (memorySource === 'systemd') {
     const { stdout } = await exec('systemctl',
-      ['show', 'hermit', '--property', 'MemoryCurrent', '--value']);
+      ['show', 'barnacle', '--property', 'MemoryCurrent', '--value']);
     const bytes = Number(stdout.trim());
-    if (!Number.isFinite(bytes) || bytes <= 0) throw new Error(`Cannot read hermit.service memory: ${stdout.trim()}`);
+    if (!Number.isFinite(bytes) || bytes <= 0) throw new Error(`Cannot read barnacle.service memory: ${stdout.trim()}`);
     return bytes;
   }
   const { stdout } = await exec('docker',
@@ -65,7 +65,7 @@ async function containerMemory() {
 
 async function cgroupPeakMemory() {
   const result = memorySource === 'systemd'
-    ? await exec('systemctl', ['show', 'hermit', '--property', 'MemoryPeak', '--value'])
+    ? await exec('systemctl', ['show', 'barnacle', '--property', 'MemoryPeak', '--value'])
     : await exec('docker', ['exec', containerId, 'cat', '/sys/fs/cgroup/memory.peak']);
   const bytes = Number(result.stdout.trim());
   if (!Number.isFinite(bytes) || bytes <= 0) throw new Error(`Cannot read cgroup memory peak: ${result.stdout.trim()}`);

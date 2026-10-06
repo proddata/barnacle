@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$#" -ne 1 ]; then
-    echo "usage: $0 path/to/hermit.rpm" >&2
+    echo "usage: $0 path/to/barnacle.rpm" >&2
     exit 2
 fi
 
@@ -12,7 +12,7 @@ rpm_path="$rpm_dir/$(basename -- "$1")"
 command -v docker >/dev/null 2>&1 || { echo 'docker is required' >&2; exit 1; }
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-container="hermit-fedora-service-$$"
+container="barnacle-fedora-service-$$"
 cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
 trap cleanup EXIT HUP INT TERM
 
@@ -27,11 +27,11 @@ done
 docker exec "$container" systemctl is-system-running --quiet
 
 # /tmp is a systemd tmpfs; docker cp must use a path on the container rootfs.
-docker cp "$rpm_path" "$container:/var/tmp/hermit.rpm"
-docker exec "$container" dnf install -y /var/tmp/hermit.rpm >/dev/null
-docker exec "$container" rpm -V hermit
-docker exec "$container" systemd-analyze verify hermit.service
-docker exec "$container" systemctl start hermit
+docker cp "$rpm_path" "$container:/var/tmp/barnacle.rpm"
+docker exec "$container" dnf install -y /var/tmp/barnacle.rpm >/dev/null
+docker exec "$container" rpm -V barnacle
+docker exec "$container" systemd-analyze verify barnacle.service
+docker exec "$container" systemctl start barnacle
 
 wait_health() {
     port=$1
@@ -41,25 +41,25 @@ wait_health() {
         fi
         sleep 1
     done
-    docker exec "$container" systemctl status hermit --no-pager || true
+    docker exec "$container" systemctl status barnacle --no-pager || true
     return 1
 }
 
 wait_health 8080
 docker exec "$container" sh -c '
     set -eu
-    test "$(systemctl show -P Restart hermit)" = on-failure
-    test "$(systemctl show -P MemoryHigh hermit)" = 201326592
-    test "$(systemctl show -P MemoryMax hermit)" = 268435456
-    test "$(systemctl show -P MemorySwapMax hermit)" = 0
-    test "$(systemctl show -P DynamicUser hermit)" = yes
+    test "$(systemctl show -P Restart barnacle)" = on-failure
+    test "$(systemctl show -P MemoryHigh barnacle)" = 201326592
+    test "$(systemctl show -P MemoryMax barnacle)" = 268435456
+    test "$(systemctl show -P MemorySwapMax barnacle)" = 0
+    test "$(systemctl show -P DynamicUser barnacle)" = yes
 '
 
-old_pid=$(docker exec "$container" systemctl show -P MainPID hermit)
+old_pid=$(docker exec "$container" systemctl show -P MainPID barnacle)
 docker exec "$container" kill -KILL "$old_pid"
 restarted=false
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    new_pid=$(docker exec "$container" systemctl show -P MainPID hermit)
+    new_pid=$(docker exec "$container" systemctl show -P MainPID barnacle)
     if [ "$new_pid" != 0 ] && [ "$new_pid" != "$old_pid" ] && \
        docker exec "$container" curl --silent --fail http://127.0.0.1:8080/healthz >/dev/null; then
         restarted=true
@@ -67,74 +67,74 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     fi
     sleep 1
 done
-[ "$restarted" = true ] || { echo 'systemd did not restart Hermit after SIGKILL' >&2; exit 1; }
-docker exec "$container" sh -c 'test "$(systemctl show -P NRestarts hermit)" -ge 1'
+[ "$restarted" = true ] || { echo 'systemd did not restart Barnacle after SIGKILL' >&2; exit 1; }
+docker exec "$container" sh -c 'test "$(systemctl show -P NRestarts barnacle)" -ge 1'
 
-docker exec "$container" sed -i 's/127.0.0.1:8080/127.0.0.1:18080/' /etc/sysconfig/hermit
-docker exec "$container" systemctl restart hermit
+docker exec "$container" sed -i 's/127.0.0.1:8080/127.0.0.1:18080/' /etc/sysconfig/barnacle
+docker exec "$container" systemctl restart barnacle
 wait_health 18080
 if docker exec "$container" curl --silent --fail --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
     echo 'old listen address remained active after config change' >&2
     exit 1
 fi
-docker exec "$container" sed -i 's/127.0.0.1:18080/127.0.0.1:8080/' /etc/sysconfig/hermit
-docker exec "$container" systemctl restart hermit
+docker exec "$container" sed -i 's/127.0.0.1:18080/127.0.0.1:8080/' /etc/sysconfig/barnacle
+docker exec "$container" systemctl restart barnacle
 wait_health 8080
 
 # The packaged fixed-user drop-in is opt-in. Verify a group-restricted key.
-docker exec "$container" systemctl stop hermit
+docker exec "$container" systemctl stop barnacle
 docker exec "$container" sh -c '
     set -eu
-    groupadd --system hermit
-    groupadd --system hermit-service-keys
-    useradd --system --gid hermit --home-dir /nonexistent --shell /sbin/nologin hermit
-    install -d -m 0750 -o root -g hermit-service-keys /run/hermit/service-keys
-    install -d -m 0755 /etc/pki/hermit /etc/systemd/system/hermit.service.d
+    groupadd --system barnacle
+    groupadd --system barnacle-service-keys
+    useradd --system --gid barnacle --home-dir /nonexistent --shell /sbin/nologin barnacle
+    install -d -m 0750 -o root -g barnacle-service-keys /run/barnacle/service-keys
+    install -d -m 0755 /etc/pki/barnacle /etc/systemd/system/barnacle.service.d
     openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-        -subj /CN=hermit-fedora-service-test \
-        -keyout /run/hermit/service-keys/client.key \
-        -out /etc/pki/hermit/ca.pem >/dev/null 2>&1
-    chown root:hermit-service-keys /run/hermit/service-keys/client.key
-    chmod 0640 /run/hermit/service-keys/client.key
-    ! runuser -u hermit -g hermit -- test -r /run/hermit/service-keys/client.key
-    cp /usr/share/hermit/hermit-key-access.conf /etc/systemd/system/hermit.service.d/key-access.conf
-    cat > /etc/systemd/system/hermit.service.d/99-key-check.conf <<EOF
+        -subj /CN=barnacle-fedora-service-test \
+        -keyout /run/barnacle/service-keys/client.key \
+        -out /etc/pki/barnacle/ca.pem >/dev/null 2>&1
+    chown root:barnacle-service-keys /run/barnacle/service-keys/client.key
+    chmod 0640 /run/barnacle/service-keys/client.key
+    ! runuser -u barnacle -g barnacle -- test -r /run/barnacle/service-keys/client.key
+    cp /usr/share/barnacle/barnacle-key-access.conf /etc/systemd/system/barnacle.service.d/key-access.conf
+    cat > /etc/systemd/system/barnacle.service.d/99-key-check.conf <<EOF
 [Service]
-ExecStartPre=/usr/bin/test -r /run/hermit/service-keys/client.key
+ExecStartPre=/usr/bin/test -r /run/barnacle/service-keys/client.key
 EOF
-    printf "\nHERMIT_PG_CA_FILE=/etc/pki/hermit/ca.pem\n" >> /etc/sysconfig/hermit
+    printf "\nBARNACLE_PG_CA_FILE=/etc/pki/barnacle/ca.pem\n" >> /etc/sysconfig/barnacle
     systemctl daemon-reload
-    systemd-analyze verify hermit.service
-    systemctl restart hermit
+    systemd-analyze verify barnacle.service
+    systemctl restart barnacle
 '
 wait_health 8080
 docker exec "$container" sh -c '
     set -eu
-    test "$(systemctl show -P DynamicUser hermit)" = no
-    test "$(systemctl show -P User hermit)" = hermit
-    test "$(systemctl show -P Group hermit)" = hermit
-    test "$(systemctl show -P SupplementaryGroups hermit)" = hermit-service-keys
-    case "$(systemctl show -P ReadOnlyPaths hermit)" in
-        *"/run/hermit/service-keys"*) ;;
+    test "$(systemctl show -P DynamicUser barnacle)" = no
+    test "$(systemctl show -P User barnacle)" = barnacle
+    test "$(systemctl show -P Group barnacle)" = barnacle
+    test "$(systemctl show -P SupplementaryGroups barnacle)" = barnacle-service-keys
+    case "$(systemctl show -P ReadOnlyPaths barnacle)" in
+        *"/run/barnacle/service-keys"*) ;;
         *) exit 1 ;;
     esac
-    case "$(systemctl show -P ReadOnlyPaths hermit)" in
-        *"/etc/pki/hermit"*) ;;
+    case "$(systemctl show -P ReadOnlyPaths barnacle)" in
+        *"/etc/pki/barnacle"*) ;;
         *) exit 1 ;;
     esac
-    test "$(systemctl show -P NoNewPrivileges hermit)" = yes
-    test "$(systemctl show -P PrivateTmp hermit)" = yes
-    test "$(systemctl show -P ProtectHome hermit)" = yes
-    test "$(systemctl show -P ProtectSystem hermit)" = strict
-    test "$(systemctl show -P MemoryHigh hermit)" = 201326592
-    test "$(systemctl show -P MemoryMax hermit)" = 268435456
-    test "$(systemctl show -P MemorySwapMax hermit)" = 0
+    test "$(systemctl show -P NoNewPrivileges barnacle)" = yes
+    test "$(systemctl show -P PrivateTmp barnacle)" = yes
+    test "$(systemctl show -P ProtectHome barnacle)" = yes
+    test "$(systemctl show -P ProtectSystem barnacle)" = strict
+    test "$(systemctl show -P MemoryHigh barnacle)" = 201326592
+    test "$(systemctl show -P MemoryMax barnacle)" = 268435456
+    test "$(systemctl show -P MemorySwapMax barnacle)" = 0
 '
 
-docker exec "$container" systemctl stop hermit
-docker exec "$container" sh -c 'test "$(systemctl is-active hermit)" = inactive'
+docker exec "$container" systemctl stop barnacle
+docker exec "$container" sh -c 'test "$(systemctl is-active barnacle)" = inactive'
 if docker exec "$container" curl --silent --fail --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
-    echo 'Hermit remained reachable after systemctl stop' >&2
+    echo 'Barnacle remained reachable after systemctl stop' >&2
     exit 1
 fi
 

@@ -9,6 +9,6 @@ RUN npm run build
 FROM nginx:stable-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist/ /usr/share/nginx/html/
-COPY --from=build /app/node_modules/@neondatabase/serverless/LICENSE /usr/share/doc/hermit-console/neon-LICENSE
-COPY --from=build /app/node_modules/monaco-editor/LICENSE /usr/share/doc/hermit-console/monaco-LICENSE
+COPY --from=build /app/node_modules/@neondatabase/serverless/LICENSE /usr/share/doc/barnacle-console/neon-LICENSE
+COPY --from=build /app/node_modules/monaco-editor/LICENSE /usr/share/doc/barnacle-console/monaco-LICENSE
 EXPOSE 80

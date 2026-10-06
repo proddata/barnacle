@@ -41,3 +41,22 @@
 .connection-fields .batch-field { min-width: 175px; flex: 1.3 1 175px; }
 .batch-control { display: flex; align-items: center; gap: 7px; height: 31px; color: #d4e5e7; font-size: 11px; font-weight: 500; letter-spacing: normal; text-transform: none; white-space: nowrap; }
 .connection-fields .batch-control input { width: 15px; height: 15px; min-width: 15px; margin: 0; accent-color: #5bc2b4; }
+.workbench { grid-template-columns: minmax(0, min(var(--explorer-width), 27vw)) 5px minmax(0, 1fr) 5px minmax(0, min(var(--debug-width), 30vw)); }
+.workbench.explorer-collapsed { grid-template-columns: 0 0 minmax(0, 1fr) 5px minmax(0, min(var(--debug-width), 30vw)); }
+.workbench.debug-collapsed { grid-template-columns: minmax(0, min(var(--explorer-width), 27vw)) 5px minmax(0, 1fr) 0 0; }
+.workbench.explorer-collapsed.debug-collapsed { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; }
+.query-area, .editor-wrap { overflow: hidden; }
+.editor-wrap { position: relative; }
+#sql-editor { position: absolute; inset: 0; }
+.editor-toolbar { overflow: hidden; }
+.query-tabs { flex: 1 1 auto; }
+.toolbar-spacer { flex: 0 0 auto; }
+.session-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 12px; margin-top: 9px; padding-top: 8px; border-top: 1px solid #30434d; }
+.session-controls .session-label { color: #a5bac2; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.session-controls .session-state { color: #9eb4be; font-size: 11px; margin-right: 5px; }
+.session-controls button:disabled { opacity: .45; cursor: default; }
+.session-state.connected { color: #59d0a1; }
+.session-state.connecting { color: #e2bc77; }
+.session-state.failed { color: #ed8a73; }
+.connection-hint strong { color: #e2bc77; font-weight: 650; }
+@media (max-width: 760px) { .workbench, .workbench:not(.explorer-collapsed):not(.debug-collapsed), .workbench.explorer-collapsed, .workbench.debug-collapsed, .workbench.explorer-collapsed.debug-collapsed { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; } }

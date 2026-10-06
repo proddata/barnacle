@@ -29,9 +29,9 @@ const parsed = new URL(remoteDatabaseUrl);
 const defaultEndpoint = neonConfig.fetchEndpoint;
 const remoteEndpoint = settings.NEON_COMPARE_ENDPOINT ||
   defaultEndpoint(parsed.hostname, parsed.port);
-const localEndpoint = `${settings.HERMIT_BASE_URL || 'http://127.0.0.1:8080'}/sql`;
+const localEndpoint = `${settings.BARNACLE_BASE_URL || 'http://127.0.0.1:8080'}/sql`;
 const localDatabaseUrl = settings.TEST_DATABASE_URL ||
-  'postgres://hermit:hermit_dev_password@localhost:5432/hermit';
+  'postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle';
 
 const differences = [];
 const knownNeonDifferences = [];
@@ -43,7 +43,7 @@ for (const item of typeMatrix) {
     try {
       local = await queryMatrix(localEndpoint, localDatabaseUrl, item, raw);
     } catch (error) {
-      differences.push(`${label}: Hermit failed: ${error.message}`);
+      differences.push(`${label}: Barnacle failed: ${error.message}`);
       continue;
     }
     let remote;
@@ -64,7 +64,7 @@ for (const item of typeMatrix) {
         assert.deepEqual(local[key], remote[key]);
       } catch {
         matched = false;
-        const detail = `${label}: ${key} differs\n  Hermit: ${JSON.stringify(local[key])}\n  Neon:   ${JSON.stringify(remote[key])}`;
+        const detail = `${label}: ${key} differs\n  Barnacle: ${JSON.stringify(local[key])}\n  Neon:   ${JSON.stringify(remote[key])}`;
         if (!raw && item.name === 'box array delimiter' && key === 'rows') {
           knownNeonDifferences.push(detail);
         } else {

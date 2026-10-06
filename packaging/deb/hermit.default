@@ -1,6 +1,0 @@
-# Restrict this listener to a local ingress by default.
-HERMIT_LISTEN=127.0.0.1:8080
-HERMIT_PG_ADDR=127.0.0.1:5432
-HERMIT_PG_SSLMODE=require
-# HERMIT_PG_CA_FILE=/etc/hermit/pg-ca.pem
-# HERMIT_METRICS=true

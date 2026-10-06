@@ -72,13 +72,13 @@ func TestOIDCAccessTokenGate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(provider.serve))
 	defer server.Close()
 	provider.issuer = server.URL
-	gate, err := NewOIDCGate(t.Context(), server.URL, "hermit-api", server.Client())
+	gate, err := NewOIDCGate(t.Context(), server.URL, "barnacle-api", server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().Unix()
 	base := map[string]any{
-		"iss": server.URL, "aud": []string{"other", "hermit-api"},
+		"iss": server.URL, "aud": []string{"other", "barnacle-api"},
 		"sub": "person-1", "client_id": "test-client", "jti": "test-id",
 		"iat": now, "nbf": now - 1, "exp": now + 60,
 	}

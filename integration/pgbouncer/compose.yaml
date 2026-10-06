@@ -26,14 +26,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-  hermit_pooltest:
+  barnacle_pooltest:
     build: .
     environment:
-      HERMIT_LISTEN: ':8080'
-      HERMIT_PG_ADDR: postgres:5432
-      HERMIT_PG_ALLOWED_ADDRS: postgres:5432,pgbouncer_session:6432,pgbouncer_transaction:6432,pgbouncer_statement:6432
-      HERMIT_PG_SSLMODE: disable
-      HERMIT_PG_QUERY_EXEC_MODE: '${HERMIT_PG_QUERY_EXEC_MODE:-exec}'
+      BARNACLE_LISTEN: ':8080'
+      BARNACLE_PG_ADDR: postgres:5432
+      BARNACLE_PG_ALLOWED_ADDRS: postgres:5432,pgbouncer_session:6432,pgbouncer_transaction:6432,pgbouncer_statement:6432
+      BARNACLE_PG_SSLMODE: disable
+      BARNACLE_PG_QUERY_EXEC_MODE: '${BARNACLE_PG_QUERY_EXEC_MODE:-exec}'
     ports:
       - '127.0.0.1:18080:8080'
     depends_on:

@@ -54,7 +54,7 @@ func (c Config) DialPostgres(addr string) (net.Conn, error) {
 	}
 	if c.PGSSLMode != "require" {
 		backend.Close()
-		return nil, errors.New("HERMIT_PG_SSLMODE must be disable or require")
+		return nil, errors.New("BARNACLE_PG_SSLMODE must be disable or require")
 	}
 	if err := backend.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		backend.Close()

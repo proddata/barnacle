@@ -16,7 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgproto3"
-	"github.com/proddata/hermit/internal/gateway"
+	"github.com/proddata/barnacle/internal/gateway"
 )
 
 func TestDBErrorIdentifiesTLSVerificationFailure(t *testing.T) {
@@ -26,7 +26,7 @@ func TestDBErrorIdentifiesTLSVerificationFailure(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != 502 || body.Code != "HERMIT_UPSTREAM_TLS_VERIFICATION_FAILED" || body.Message == "" {
+	if response.Code != 502 || body.Code != "BARNACLE_UPSTREAM_TLS_VERIFICATION_FAILED" || body.Message == "" {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }
@@ -222,7 +222,7 @@ func TestRequiredOAuthUnavailable(t *testing.T) {
 			if decodeErr := json.Unmarshal(response.Body.Bytes(), &body); decodeErr != nil {
 				t.Fatal(decodeErr)
 			}
-			if response.Code != 502 || body.Code != "HERMIT_UPSTREAM_OAUTH_UNAVAILABLE" || body.Message == "" {
+			if response.Code != 502 || body.Code != "BARNACLE_UPSTREAM_OAUTH_UNAVAILABLE" || body.Message == "" {
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
 			if response.Header().Get("WWW-Authenticate") != "" {

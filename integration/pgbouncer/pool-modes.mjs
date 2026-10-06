@@ -3,7 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Client, neon, neonConfig } from '@neondatabase/serverless';
 import WebSocket from 'ws';
 
-const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:18080';
+const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:18080';
 neonConfig.fetchEndpoint = `${base}/sql`;
 const endpoint = new URL(base);
 neonConfig.webSocketConstructor = WebSocket;
@@ -11,9 +11,9 @@ neonConfig.useSecureWebSocket = endpoint.protocol === 'https:';
 neonConfig.wsProxy = `${endpoint.host}/v2`;
 neonConfig.pipelineConnect = false;
 neonConfig.forceDisablePgSSL = true;
-const password = 'hermit_dev_password';
+const password = 'barnacle_dev_password';
 const url = (mode, name) => {
-  const value = new URL(`postgres://hermit:${password}@pgbouncer_${mode}:6432/hermit`);
+  const value = new URL(`postgres://barnacle:${password}@pgbouncer_${mode}:6432/barnacle`);
   if (name) value.searchParams.set('application_name', name);
   return value.toString();
 };
@@ -80,7 +80,7 @@ for (const mode of ['session', 'transaction', 'statement']) {
     assert.equal(driverResult[0].value, 13);
   }
 
-  const name = `hermit_pgbouncer_cancel_${mode}_${process.pid}`;
+  const name = `barnacle_pgbouncer_cancel_${mode}_${process.pid}`;
   const controller = new AbortController();
   const request = fetch(`${base}/sql`, {
     method: 'POST',
@@ -103,11 +103,11 @@ for (const mode of ['session', 'transaction', 'statement']) {
 const client = new Client(url('session'));
 await client.connect();
 try {
-  await client.query("set application_name = 'hermit_pgbouncer_session_state'");
+  await client.query("set application_name = 'barnacle_pgbouncer_session_state'");
   const state = await client.query("select current_setting('application_name') as name");
-  assert.equal(state.rows[0].name, 'hermit_pgbouncer_session_state');
-  await client.query('prepare hermit_pooltest(int) as select $1::int as value');
-  const prepared = await client.query('execute hermit_pooltest(19)');
+  assert.equal(state.rows[0].name, 'barnacle_pgbouncer_session_state');
+  await client.query('prepare barnacle_pooltest(int) as select $1::int as value');
+  const prepared = await client.query('execute barnacle_pooltest(19)');
   assert.equal(prepared.rows[0].value, 19);
 } finally {
   await client.end();
