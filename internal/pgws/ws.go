@@ -147,8 +147,8 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.sessions.remove(session)
 	if c.Metrics != nil {
-		c.Metrics.AddWebSocket(1)
-		defer c.Metrics.AddWebSocket(-1)
+		c.Metrics.OpenWebSocket()
+		defer c.Metrics.CloseWebSocket()
 	}
 	type relayEnd struct {
 		cancel bool

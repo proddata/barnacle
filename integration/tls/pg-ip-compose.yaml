@@ -7,8 +7,6 @@ services:
       BARNACLE_PG_TLS_SERVER_NAME: postgres
       BARNACLE_PG_SSLMODE: require
       BARNACLE_PG_CA_FILE: /pgcerts/ca.crt
-      BARNACLE_PG_USER: barnacle
-      BARNACLE_PG_DATABASE: barnacle
     ports:
       - '127.0.0.1:8082:8080'
     volumes:

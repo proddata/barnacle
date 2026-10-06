@@ -8,7 +8,7 @@ import (
 
 type Config struct {
 	Listen, PGAddr, ReadyPGAddr                                 string
-	PGDatabase, PGUser, PGPassword, PGSSLMode, PGTLSServerName  string
+	PGSSLMode, PGTLSServerName                                  string
 	PGQueryExecMode                                             string
 	PGAllowedAddrs                                              map[string]struct{}
 	AllowedOrigins                                              map[string]struct{}

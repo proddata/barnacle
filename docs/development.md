@@ -46,7 +46,7 @@ CI builds, installs, and smoke-tests x86_64 and aarch64 RPMs in Fedora 44 contai
 ./integration/fedora-service/run.sh dist/barnacle-*.rpm
 ```
 
-This local test uses a privileged container with its own cgroup namespace. It checks package and unit verification, startup, the effective memory limits, restart after a forced crash, sysconfig changes across a restart, the opt-in key-access variant's group-restricted key access, and clean stop. Use an RPM built for Docker's architecture. A real Fedora host is still needed to check integration with its ingress, PostgreSQL, certificates, and memory pressure. For installation and operation, see the [Fedora service guide](deployment.md#fedora-service).
+This local test uses a privileged container with its own cgroup namespace. It checks package and unit verification, startup, the effective memory limits, restart after a forced crash, sysconfig changes across a restart, the opt-in key-access variant's group-restricted key access, and clean stop. Use an RPM built for Docker's architecture. A real Fedora host is still needed to check integration with its ingress, PostgreSQL, certificates, and memory pressure. For installation and operation, see the [Fedora service guide](operations.md#fedora-service).
 
 ## Test and inspect
 
@@ -67,8 +67,6 @@ For a native development setup with PostgreSQL listening on the host, run `go te
 npm ci --prefix integration
 BARNACLE_PG_ADDR=127.0.0.1:5432 \
 BARNACLE_PG_SSLMODE=disable \
-BARNACLE_PG_USER=barnacle \
-BARNACLE_PG_DATABASE=barnacle \
 TEST_DATABASE_URL='postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle' \
 ./integration/run.sh
 ```

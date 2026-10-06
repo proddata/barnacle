@@ -86,7 +86,7 @@ func (c Config) Preflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Neon-Connection-String, Neon-Array-Mode, Neon-Raw-Text-Output, Neon-Batch-Read-Only, Neon-Batch-Isolation-Level, Neon-Batch-Deferrable")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Connection-String, Neon-Connection-String, Array-Mode, Neon-Array-Mode, Raw-Text-Output, Neon-Raw-Text-Output, Batch-Read-Only, Neon-Batch-Read-Only, Batch-Isolation-Level, Neon-Batch-Isolation-Level, Batch-Deferrable, Neon-Batch-Deferrable")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	w.WriteHeader(http.StatusNoContent)
 }

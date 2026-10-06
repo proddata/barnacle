@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -123,7 +124,7 @@ func main() {
 	}
 	pgRootCAs, err := gateway.LoadPGRootCAs(os.Getenv("BARNACLE_PG_CA_FILE"), os.Getenv("BARNACLE_PG_EXTRA_CA_FILE"))
 	if err != nil {
-		slog.Error("invalid BARNACLE_PG_CA_FILE", "error", err)
+		slog.Error("invalid PostgreSQL CA file", "error", err)
 		os.Exit(1)
 	}
 	allowedOrigins, err := gateway.ParseAllowedOrigins(os.Getenv("BARNACLE_ALLOWED_ORIGIN"))
@@ -141,9 +142,6 @@ func main() {
 		PGAddr:               defaultPGAddr,
 		ReadyPGAddr:          readyPGAddr,
 		PGAllowedAddrs:       allowedAddrs,
-		PGDatabase:           env("BARNACLE_PG_DATABASE", "postgres"),
-		PGUser:               env("BARNACLE_PG_USER", "postgres"),
-		PGPassword:           os.Getenv("BARNACLE_PG_PASSWORD"),
 		PGSSLMode:            pgSSLMode,
 		PGQueryExecMode:      pgQueryExecMode,
 		PGTLSServerName:      os.Getenv("BARNACLE_PG_TLS_SERVER_NAME"),
@@ -178,12 +176,17 @@ func main() {
 	wsHandler := pgws.New(&cfg)
 	mux.HandleFunc("POST /sql", cfg.Metrics.MeasureSQL(sqlhttp.Gzip(sqlHandler.Serve)))
 	mux.HandleFunc("OPTIONS /sql", cfg.Preflight)
-	if strings.EqualFold(os.Getenv("BARNACLE_METRICS"), "true") {
-		mux.HandleFunc("GET /metrics", cfg.Metrics.Serve)
-	} else {
-		mux.HandleFunc("GET /metrics", http.NotFound)
+	metricsSetting := os.Getenv("BARNACLE_METRICS")
+	if metricsSetting != "" && !strings.EqualFold(metricsSetting, "true") && !strings.EqualFold(metricsSetting, "false") {
+		slog.Error("BARNACLE_METRICS must be true or false")
+		os.Exit(1)
 	}
-	mux.HandleFunc("GET /v1", wsHandler.Serve)
+	metricsEnabled := strings.EqualFold(metricsSetting, "true")
+	metricsListen := os.Getenv("BARNACLE_METRICS_LISTEN")
+	if metricsListen == "" {
+		metricsListen = "127.0.0.1:9090"
+	}
+	mux.HandleFunc("GET /metrics", http.NotFound)
 	mux.HandleFunc("GET /v2", wsHandler.Serve)
 	server := &http.Server{
 		Addr: cfg.Listen, Handler: mux,
@@ -193,6 +196,31 @@ func main() {
 		IdleTimeout:       httpIdleTimeout,
 		MaxHeaderBytes:    32 << 10,
 	}
+	mainListener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		slog.Error("failed to listen", "address", cfg.Listen, "error", err)
+		os.Exit(1)
+	}
+	var metricsServer *http.Server
+	var metricsListener net.Listener
+	if metricsEnabled {
+		metricsListener, err = net.Listen("tcp", metricsListen)
+		if err != nil {
+			mainListener.Close()
+			slog.Error("failed to listen for metrics", "address", metricsListen, "error", err)
+			os.Exit(1)
+		}
+		metricsMux := http.NewServeMux()
+		metricsMux.HandleFunc("GET /metrics", cfg.Metrics.Serve)
+		metricsServer = &http.Server{
+			Handler:           metricsMux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       httpReadTimeout,
+			WriteTimeout:      httpWriteTimeout,
+			IdleTimeout:       httpIdleTimeout,
+			MaxHeaderBytes:    32 << 10,
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	shutdownDone := make(chan struct{})
@@ -201,24 +229,36 @@ func main() {
 		stop() // A second signal uses the operating system's default handling.
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		results := make(chan error, 2)
+		results := make(chan error, 3)
 		go func() { results <- server.Shutdown(shutdown) }()
 		go func() { results <- wsHandler.Shutdown(shutdown) }()
-		for range 2 {
+		count := 2
+		if metricsServer != nil {
+			count++
+			go func() { results <- metricsServer.Shutdown(shutdown) }()
+		}
+		for range count {
 			if err := <-results; err != nil {
 				slog.Warn("shutdown did not complete cleanly", "error", err)
 			}
 		}
 		close(shutdownDone)
 	}()
-	slog.Info("barnacle listening", "address", cfg.Listen, "postgres", cfg.PGAddr)
-	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-		stop()
-		<-shutdownDone
-		slog.Error("server stopped", "error", err)
+	serveResults := make(chan error, 2)
+	go func() { serveResults <- server.Serve(mainListener) }()
+	slog.Info("barnacle listening", "address", mainListener.Addr().String(), "postgres", cfg.PGAddr)
+	if metricsServer != nil {
+		go func() { serveResults <- metricsServer.Serve(metricsListener) }()
+		slog.Info("metrics listening", "address", metricsListener.Addr().String())
+	}
+	serveErr := <-serveResults
+	interrupted := ctx.Err() != nil
+	stop()
+	<-shutdownDone
+	if !interrupted || !errors.Is(serveErr, http.ErrServerClosed) {
+		slog.Error("server stopped", "error", serveErr)
 		os.Exit(1)
 	}
-	<-shutdownDone
 }
 
 func positiveIntEnv(key string, fallback int) (int, error) {

@@ -119,6 +119,7 @@ export async function closeQuerySession(session) {
   session.client = null;
   session.url = null;
   session.connection = null;
+  session.transactionStatus = null;
   session.status = 'disconnected';
   session.error = '';
   session.onChange?.();
@@ -136,6 +137,7 @@ export async function openQuerySession(settings, session) {
   session.client = client;
   session.url = url;
   session.connection = null;
+  session.transactionStatus = null;
   session.status = 'connecting';
   session.error = '';
   session.onChange?.();
@@ -143,14 +145,21 @@ export async function openQuerySession(settings, session) {
     connection.parameters.push({ name: parameterName, value: parameterValue });
   };
   const onBackendKeyData = ({ processID }) => { connection.backendProcessID = processID; };
+  const onReadyForQuery = ({ status }) => {
+    if (session.client !== client || !status) return;
+    session.transactionStatus = status;
+    session.onChange?.();
+  };
   client.connection.on('parameterStatus', onParameterStatus);
   client.connection.on('backendKeyData', onBackendKeyData);
+  client.connection.on('readyForQuery', onReadyForQuery);
   const forgetClosedSession = () => {
     if (session.client !== client) return;
     if (session.status === 'connecting') return;
     session.client = null;
     session.url = null;
     session.connection = null;
+    session.transactionStatus = null;
     session.status = 'disconnected';
     session.onChange?.();
   };
@@ -171,6 +180,7 @@ export async function openQuerySession(settings, session) {
       session.client = null;
       session.url = null;
       session.connection = null;
+      session.transactionStatus = null;
       session.status = 'failed';
       session.error = safeError(error, settings);
       session.onChange?.();
@@ -190,6 +200,7 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
   const trace = {
     id: ++nextTraceId,
     purpose,
+    sql,
     state: 'running',
     startedAt: new Date().toLocaleTimeString(),
     durationMs: null,
@@ -252,6 +263,7 @@ export async function executeBatch(settings, statements, report = () => {}) {
   const trace = {
     id: ++nextTraceId,
     purpose: 'batch',
+    statements,
     state: 'running',
     startedAt: new Date().toLocaleTimeString(),
     durationMs: null,

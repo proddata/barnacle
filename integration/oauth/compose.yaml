@@ -45,8 +45,6 @@ services:
       BARNACLE_LISTEN: :8080
       BARNACLE_PG_ADDR: postgres:5432
       BARNACLE_PG_SSLMODE: disable
-      BARNACLE_PG_USER: appuser
-      BARNACLE_PG_DATABASE: barnacle
       BARNACLE_OIDC_ISSUER: https://issuer:8443
       BARNACLE_OIDC_AUDIENCE: https://postgres.example.internal/
       SSL_CERT_FILE: /fixture/ca.crt
