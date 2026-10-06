@@ -11,8 +11,8 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><div><strong>BARNACLE</strong><span>DEV CONSOLE</span></div></div>
+      <nav class="top-nav" aria-label="Console pages"><a id="nav-workbench" class="top-nav-link active" href="#workbench" aria-current="page">SQL workbench</a><a id="nav-metrics" class="top-nav-link" href="#metrics">Metrics</a></nav>
       <div class="top-actions">
-        <button id="toggle-connection" class="subtle-button" type="button" aria-expanded="true" aria-controls="connection-panel">Connection <span aria-hidden="true">⌄</span></button>
         <span id="connection-badge" class="connection-badge"><span class="status-dot"></span> Not connected</span>
         <button id="run-query" class="primary-button" type="button"><span aria-hidden="true">▶</span> <span id="run-label">Run all</span> <kbd>⌘/Ctrl ↵</kbd></button>
       </div>
@@ -20,12 +20,24 @@
 
     <section id="connection-panel" class="connection-panel" aria-label="Connection settings">
       <div class="connection-manager">
-        <label>Saved connections <select id="connection-select" aria-label="Saved connections"></select></label>
-        <button id="new-connection" class="subtle-button" type="button">New</button>
+        <select id="connection-select" aria-label="Saved connections"></select>
         <button id="save-connection" class="subtle-button" type="button">Save</button>
-        <button id="delete-connection" class="subtle-button" type="button">Delete</button>
-        <span class="connection-save-note">Connection details are saved locally. Custom passwords and tokens stay in this tab.</span>
+        <button id="new-connection" class="subtle-button" type="button">New</button>
+        <span class="connection-manager-spacer"></span>
+        <span id="session-summary" class="session-summary" role="status"><span class="status-dot"></span><span id="startup-state">Disconnected</span></span>
+        <button id="connect-session" class="subtle-button compact" type="button">Connect</button>
+        <button id="disconnect-session" class="subtle-button compact" type="button" disabled hidden>Disconnect</button>
       </div>
+      <div class="connection-overview">
+        <span id="connection-description"></span>
+        <span id="connection-method-summary"></span>
+        <button id="toggle-connection" class="subtle-button compact" type="button" aria-expanded="false" aria-controls="connection-details">Edit details <span aria-hidden="true">⌄</span></button>
+      </div>
+      <div id="transaction-alert" class="transaction-alert" role="alert" hidden>
+        <span>Failed transaction: ROLLBACK required</span>
+        <button id="rollback-transaction" class="rollback-button" type="button">Rollback</button>
+      </div>
+      <div id="connection-details" hidden>
       <div class="connection-fields">
         <label>Name <input id="connection-name" value="Local development" autocomplete="off"></label>
         <label>Host <input id="host" value="postgres:5432" spellcheck="false" autocomplete="off" placeholder="postgres:5432"></label>
@@ -51,25 +63,22 @@
           </select>
         </label>
       </div>
-      <div id="session-controls" class="session-controls" hidden>
-        <span class="session-label">Active tab WebSocket</span>
-        <span id="startup-state" class="session-state" role="status">Disconnected</span>
-        <button id="connect-session" class="subtle-button compact" type="button">Connect</button>
-        <button id="disconnect-session" class="subtle-button compact" type="button" disabled>Disconnect</button>
+      <div class="connection-detail-footer">
+        <button id="delete-connection" class="subtle-button compact" type="button">Delete connection</button>
+        <span>Connection details are saved locally. Custom passwords and tokens stay in this tab.</span>
       </div>
-      <div class="connection-hint"><strong>Development and debugging only. Do not deploy this console in production.</strong> Enter a PostgreSQL host:port. Local Compose allows external hosts; other deployments may restrict them. The Compose development password is prefilled for local testing.</div>
+      </div>
     </section>
+    <div class="development-warning">Development and debugging console · Do not deploy in production</div>
 
     <div id="workbench" class="workbench">
       <aside id="explorer-panel" class="panel explorer-panel" aria-label="Database explorer">
-        <div class="panel-heading"><div><span class="eyebrow">DATABASE</span><h2>Explorer</h2></div><button id="refresh-schema" class="icon-button" type="button" title="Refresh schemas and tables" aria-label="Refresh schemas and tables">↻</button></div>
-        <div class="explorer-search"><span aria-hidden="true">⌕</span><input id="tree-filter" type="search" placeholder="Filter tables" aria-label="Filter tables"></div>
-        <div id="schema-tree" class="schema-tree"><p class="empty-note">Enter a password, then refresh to browse tables.</p></div>
-        <section class="startup-panel" aria-labelledby="startup-heading">
-          <div class="startup-heading"><div><span class="eyebrow">SESSION</span><h3 id="startup-heading">Server startup</h3></div></div>
+        <div class="panel-heading explorer-heading"><div class="side-tabs" role="tablist" aria-label="Database panel"><button id="show-explorer" class="side-tab active" type="button" role="tab" aria-selected="true" aria-controls="explorer-content">Explorer</button><button id="show-session" class="side-tab" type="button" role="tab" aria-selected="false" aria-controls="session-content">Session</button></div><button id="refresh-schema" class="icon-button" type="button" title="Refresh schemas and tables" aria-label="Refresh schemas and tables">↻</button></div>
+        <div id="explorer-content" class="side-content"><div class="explorer-search"><span aria-hidden="true">⌕</span><input id="tree-filter" type="search" placeholder="Filter tables" aria-label="Filter tables"></div>
+        <div id="schema-tree" class="schema-tree"><p class="empty-note">Enter a password, then refresh to browse tables.</p></div></div>
+        <section id="session-content" class="startup-panel" aria-label="Session properties" hidden>
           <div id="startup-details" class="startup-details"><p class="startup-empty">Run a query over WebSocket to see the server's startup parameters.</p></div>
         </section>
-        <div class="panel-footnote">Click a table to preview rows. Expand it to inspect columns.</div>
       </aside>
       <div id="resize-left" class="resize-handle vertical" role="separator" tabindex="0" aria-label="Resize database explorer" aria-orientation="vertical"></div>
 
@@ -85,7 +94,7 @@
             <option value="server-info">Server and session info</option>
           </select>
           <button id="toggle-explorer" class="subtle-button compact" type="button" title="Toggle database explorer" aria-controls="explorer-panel" aria-expanded="true">Explorer</button>
-          <button id="toggle-debug" class="subtle-button compact" type="button" title="Toggle debug panel" aria-controls="debug-panel" aria-expanded="true">Debug</button>
+          <button id="toggle-debug" class="subtle-button compact" type="button" title="Toggle requests panel" aria-controls="debug-panel" aria-expanded="true">Requests</button>
         </div>
         <div class="editor-wrap"><div id="sql-editor" aria-label="SQL editor"></div></div>
         <div id="resize-results" class="resize-handle horizontal" role="separator" tabindex="0" aria-label="Resize results panel" aria-orientation="horizontal"></div>
@@ -98,13 +107,38 @@
       </main>
 
       <div id="resize-right" class="resize-handle vertical" role="separator" tabindex="0" aria-label="Resize debug panel" aria-orientation="vertical"></div>
-      <aside id="debug-panel" class="panel debug-panel" aria-label="Request debug panel">
-        <div class="panel-heading"><div><span class="eyebrow">ACTIVITY</span><h2>Request debug</h2></div><button id="clear-debug" class="text-button" type="button">Clear</button></div>
-        <p class="debug-note">Driver calls and response summaries from this page. Credentials are masked; SQL and parameters remain visible.</p>
+      <aside id="debug-panel" class="panel debug-panel" aria-label="Requests">
+        <div class="panel-heading"><h2>Requests</h2><button id="clear-debug" class="text-button" type="button">Clear</button></div>
+        <div class="trace-columns"><span>Method</span><span>Operation</span><span>Time</span></div>
         <div id="trace-list" class="trace-list"><p class="empty-note">Run a query or refresh the explorer to inspect a call.</p></div>
         <div id="trace-detail" class="trace-detail" hidden></div>
       </aside>
     </div>
+
+    <main id="metrics-view" class="metrics-main" hidden>
+      <div class="metrics-heading">
+        <div><span class="eyebrow">OBSERVABILITY</span><h1>Barnacle metrics</h1><p>Current values from the Barnacle instance behind this console. Counters reset when Barnacle restarts.</p></div>
+        <div class="metrics-actions"><span id="metrics-updated" role="status">Waiting for first sample</span><button id="refresh-metrics" class="subtle-button" type="button">Refresh now</button></div>
+      </div>
+      <div id="metrics-error" class="metrics-error" role="alert" hidden></div>
+      <section class="metrics-grid" aria-label="Current metrics">
+        <article class="metric-card"><span>Active WebSockets</span><strong id="websocket-active">—</strong><small>Open client connections</small></article>
+        <article class="metric-card"><span>WebSocket connections</span><strong id="websocket-connections">—</strong><small>Accepted upgrades since startup</small></article>
+        <article class="metric-card"><span>Active HTTP SQL requests</span><strong id="http-sql-active">—</strong><small>Requests currently in progress</small></article>
+        <article class="metric-card"><span>HTTP SQL requests</span><strong id="sql-requests">—</strong><small>Total requests since startup</small></article>
+        <article class="metric-card"><span>HTTP SQL errors</span><strong id="sql-errors">—</strong><small>Responses with status 400 or higher</small></article>
+        <article class="metric-card"><span>HTTP stream interruptions</span><strong id="stream-interruptions">—</strong><small>Streams interrupted after a 200 response began</small></article>
+        <article class="metric-card"><span>Average SQL duration</span><strong id="sql-average">—</strong><small>Across completed HTTP SQL requests</small></article>
+        <article class="metric-card"><span>HTTP query limit rejections</span><strong id="http-rejections">—</strong><small>Rejected by the in-flight query limit</small></article>
+        <article class="metric-card"><span>Upstream connection limit rejections</span><strong id="upstream-rejections">—</strong><small>Rejected by the connection limit</small></article>
+        <article class="metric-card"><span>Upstream connection failures</span><strong id="upstream-failures">—</strong><small>Network, TLS, or PostgreSQL authentication failures</small></article>
+      </section>
+      <section class="metrics-section" aria-labelledby="duration-title">
+        <div class="metrics-section-heading"><div><span class="eyebrow">DISTRIBUTION</span><h2 id="duration-title">SQL request duration</h2></div><span id="duration-total">—</span></div>
+        <div id="duration-buckets" class="duration-buckets"><p class="empty-note">Waiting for metrics…</p></div>
+      </section>
+      <details class="metrics-raw"><summary>Raw Prometheus output</summary><pre id="metrics-raw">Waiting for metrics…</pre></details>
+    </main>
 
     <footer class="statusbar"><span id="status-message">Ready</span><span id="status-meta">PostgreSQL via Barnacle</span></footer>
   </div>

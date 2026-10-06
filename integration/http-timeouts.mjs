@@ -137,6 +137,10 @@ const slowReservation = createServer();
 const slowPort = await listen(slowReservation);
 await close(slowReservation);
 const slowBase = `http://127.0.0.1:${slowPort}`;
+const metricsReservation = createServer();
+const metricsPort = await listen(metricsReservation);
+await close(metricsReservation);
+const metricsBase = `http://127.0.0.1:${metricsPort}`;
 const slowChild = spawn(binary, [], {
   env: {
     ...process.env,
@@ -146,6 +150,7 @@ const slowChild = spawn(binary, [], {
     BARNACLE_MAX_HTTP_QUERIES: '1',
     BARNACLE_MAX_CONNECTIONS: '2',
     BARNACLE_METRICS: 'true',
+    BARNACLE_METRICS_LISTEN: `127.0.0.1:${metricsPort}`,
     BARNACLE_OIDC_ISSUER: '',
     BARNACLE_OIDC_AUDIENCE: '',
   },
@@ -176,7 +181,7 @@ try {
   stalled.write(`POST /sql HTTP/1.1\r\nHost: 127.0.0.1:${slowPort}\r\nConnection: close\r\nNeon-Connection-String: ${databaseUrl}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 
   await delay(1200);
-  const metrics = await within(fetch(`${slowBase}/metrics`).then((response) => response.text()), 'slow reader metrics');
+  const metrics = await within(fetch(`${metricsBase}/metrics`).then((response) => response.text()), 'slow reader metrics');
   assert.match(metrics, /barnacle_sql_requests_total 1\n/, `stalled response did not finish: ${metrics}`);
   const probe = await within(fetch(`${slowBase}/sql`, {
     method: 'POST',

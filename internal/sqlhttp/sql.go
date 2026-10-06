@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -27,12 +28,105 @@ type query struct {
 	Params    []any  `json:"params"`
 	ArrayMode *bool  `json:"arrayMode"`
 }
-type queryRequest struct {
-	Query     string  `json:"query"`
-	Params    []any   `json:"params"`
-	ArrayMode *bool   `json:"arrayMode"`
-	Queries   []query `json:"queries"`
+type queryOptions struct {
+	ArrayMode      *bool   `json:"arrayMode"`
+	RawText        *bool   `json:"rawText"`
+	ReadOnly       *bool   `json:"readOnly"`
+	IsolationLevel *string `json:"isolationLevel"`
+	Deferrable     *bool   `json:"deferrable"`
 }
+type queryRequest struct {
+	Query      string          `json:"query"`
+	Params     []any           `json:"params"`
+	ArrayMode  *bool           `json:"arrayMode"`
+	Queries    []query         `json:"queries"`
+	Options    *queryOptions   `json:"options"`
+	Connection json.RawMessage `json:"connection"`
+}
+type executionOptions struct {
+	arrayMode bool
+	rawText   bool
+	tx        pgx.TxOptions
+}
+
+func optionsForRequest(r *http.Request, req queryRequest, batch bool) (executionOptions, error) {
+	var body queryOptions
+	if req.Options != nil {
+		body = *req.Options
+	}
+	var options executionOptions
+	var err error
+	if options.arrayMode, err = optionBool(r, "Array-Mode", body.ArrayMode); err != nil {
+		return options, err
+	}
+	if options.rawText, err = optionBool(r, "Raw-Text-Output", body.RawText); err != nil {
+		return options, err
+	}
+	if batch {
+		readOnly, err := optionBool(r, "Batch-Read-Only", body.ReadOnly)
+		if err != nil {
+			return options, err
+		}
+		isolationLevel, err := optionString(r, "Batch-Isolation-Level", body.IsolationLevel)
+		if err != nil {
+			return options, err
+		}
+		deferrable, err := optionBool(r, "Batch-Deferrable", body.Deferrable)
+		if err != nil {
+			return options, err
+		}
+		if readOnly {
+			options.tx.AccessMode = pgx.ReadOnly
+		}
+		options.tx.IsoLevel, err = batchIsolation(isolationLevel)
+		if err != nil {
+			return options, err
+		}
+		if deferrable {
+			options.tx.DeferrableMode = pgx.Deferrable
+		}
+	}
+	return options, nil
+}
+
+func optionBool(r *http.Request, header string, body *bool) (bool, error) {
+	value, err := optionString(r, header, nil)
+	if err != nil {
+		return false, err
+	}
+	if body != nil {
+		if len(r.Header.Values(header))+len(r.Header.Values("Neon-"+header)) > 0 {
+			return false, fmt.Errorf("use either options or %s", header)
+		}
+		return *body, nil
+	}
+	if len(r.Header.Values(header))+len(r.Header.Values("Neon-"+header)) == 0 {
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false", header)
+	}
+}
+
+func optionString(r *http.Request, header string, body *string) (string, error) {
+	values := append(r.Header.Values(header), r.Header.Values("Neon-"+header)...)
+	if len(values) > 1 || body != nil && len(values) > 0 {
+		return "", fmt.Errorf("use one value for %s or Neon-%s", header, header)
+	}
+	if body != nil {
+		return *body, nil
+	}
+	if len(values) == 1 {
+		return values[0], nil
+	}
+	return "", nil
+}
+
 type field struct {
 	Name             string `json:"name"`
 	TableID          uint32 `json:"tableID"`
@@ -84,44 +178,63 @@ func apiError(w http.ResponseWriter, status int, err error) {
 }
 
 func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
-	raw := r.Header.Get("Neon-Connection-String")
-	authorization := r.Header.Get("Authorization")
-	var suppliedUser, suppliedPassword string
-	if authorization == "" && raw == "" {
-		return nil, errors.New("bearer token or password connection string required")
+	connectionHeaders := r.Header.Values("Connection-String")
+	neonHeaders := r.Header.Values("Neon-Connection-String")
+	if len(connectionHeaders)+len(neonHeaders) > 1 {
+		return nil, errors.New("use one connection header: Connection-String or Neon-Connection-String")
 	}
-	if raw != "" {
-		u, err := url.Parse(raw)
-		if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil || u.Opaque != "" || u.Fragment != "" {
-			return nil, errors.New("invalid PostgreSQL connection string")
+	raw := ""
+	if len(connectionHeaders) == 1 {
+		raw = connectionHeaders[0]
+	} else if len(neonHeaders) == 1 {
+		raw = neonHeaders[0]
+	}
+	authorization := r.Header.Get("Authorization")
+	if raw == "" {
+		return nil, errors.New("Connection-String or Neon-Connection-String required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Opaque != "" || u.Fragment != "" {
+		return nil, errors.New("invalid PostgreSQL connection string")
+	}
+	authScheme, _, hasAuthScheme := strings.Cut(authorization, " ")
+	if authorization != "" && !hasAuthScheme {
+		return nil, errors.New("expected Authorization: Basic <credentials> or Bearer <token>")
+	}
+	if hasAuthScheme && strings.EqualFold(authScheme, "Basic") {
+		user, password, ok := r.BasicAuth()
+		if !ok || user == "" || password == "" {
+			return nil, errors.New("expected Authorization: Basic <credentials>")
 		}
+		if u.User != nil {
+			return nil, errors.New("provide PostgreSQL credentials in either Authorization or connection")
+		}
+		u.User = url.UserPassword(user, password)
+		raw = u.String()
+	}
+	var suppliedUser, suppliedPassword string
+	if u.User != nil {
 		suppliedUser = u.User.Username()
 		suppliedPassword, _ = u.User.Password()
-		if suppliedUser == "" {
-			return nil, errors.New("database and user required")
-		}
-		for key, values := range u.Query() {
-			switch key {
-			case "sslmode", "channel_binding", "application_name":
-			case "require_auth":
-				if len(values) != 1 || values[0] != "scram-sha-256" && values[0] != "md5" {
-					return nil, errors.New("unsupported PostgreSQL authentication method")
-				}
-			default:
-				return nil, errors.New("unsupported PostgreSQL connection option")
+	}
+	if suppliedUser == "" || u.Path == "" || u.Path == "/" {
+		return nil, errors.New("database and user required")
+	}
+	for key, values := range u.Query() {
+		switch key {
+		case "sslmode", "channel_binding", "application_name":
+		case "require_auth":
+			if len(values) != 1 || values[0] != "scram-sha-256" && values[0] != "md5" {
+				return nil, errors.New("unsupported PostgreSQL authentication method")
 			}
-		}
-		if authorization == "" && suppliedPassword == "" {
-			return nil, errors.New("password connection string required")
+		default:
+			return nil, errors.New("unsupported PostgreSQL connection option")
 		}
 	}
-	if raw == "" {
-		if c.PGAddr == "" {
-			return nil, errors.New("Neon-Connection-String required without BARNACLE_PG_ADDR")
-		}
-		raw = (&url.URL{Scheme: "postgres", User: url.UserPassword(c.PGUser, c.PGPassword), Host: c.PGAddr, Path: "/" + c.PGDatabase}).String()
+	if authorization == "" && suppliedPassword == "" {
+		return nil, errors.New("PostgreSQL password or Authorization required")
 	}
-	upstream, err := c.HTTPUpstreamAddr(r.Header.Get("Neon-Connection-String"))
+	upstream, err := c.HTTPUpstreamAddr(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +278,7 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	} else {
 		return nil, errors.New("BARNACLE_PG_SSLMODE must be disable or require")
 	}
-	if authorization != "" {
+	if authorization != "" && !strings.EqualFold(authScheme, "Basic") {
 		scheme, token, ok := strings.Cut(authorization, " ")
 		if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
 			return nil, errors.New("expected Authorization: Bearer <token>")
@@ -213,6 +326,10 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if req.Connection != nil {
+		apiError(w, 400, errors.New("connection must be supplied in Connection-String or Neon-Connection-String header"))
+		return
+	}
 	batch := req.Queries != nil
 	if batch && req.Query != "" || !batch && req.Query == "" {
 		apiError(w, 400, errors.New("provide query or queries"))
@@ -224,6 +341,11 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(queries) == 0 || len(queries) > 100 {
 		apiError(w, 400, errors.New("expected 1 to 100 queries"))
+		return
+	}
+	requestOptions, err := optionsForRequest(r, req, batch)
+	if err != nil {
+		apiError(w, 400, err)
 		return
 	}
 	if !c.AcquireHTTP() {
@@ -258,8 +380,8 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(context.Background())
-	arrayMode := strings.EqualFold(r.Header.Get("Neon-Array-Mode"), "true")
-	rawText := strings.EqualFold(r.Header.Get("Neon-Raw-Text-Output"), "true")
+	arrayMode := requestOptions.arrayMode
+	rawText := requestOptions.rawText
 	rowLimit := c.MaxHTTPRowBytes
 	if batch {
 		rowLimit = min(rowLimit, c.MaxHTTPBufferedBytes)
@@ -272,19 +394,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	} = conn
 	var tx pgx.Tx
 	if batch {
-		options := pgx.TxOptions{}
-		if strings.EqualFold(r.Header.Get("Neon-Batch-Read-Only"), "true") {
-			options.AccessMode = pgx.ReadOnly
-		}
-		options.IsoLevel, err = batchIsolation(r.Header.Get("Neon-Batch-Isolation-Level"))
-		if err != nil {
-			apiError(w, 400, errors.New("invalid isolation level"))
-			return
-		}
-		if strings.EqualFold(r.Header.Get("Neon-Batch-Deferrable"), "true") {
-			options.DeferrableMode = pgx.Deferrable
-		}
-		tx, err = conn.BeginTx(ctx, options)
+		tx, err = conn.BeginTx(ctx, requestOptions.tx)
 		if err != nil {
 			dbError(w, err)
 			return
@@ -313,7 +423,9 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if !batch && canStream(rows, conn.TypeMap(), rawText) {
 			if err := streamSingle(w, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, c.MaxHTTPResponseBytes); err != nil {
-				slog.Warn("HTTP result stream interrupted", "kind", interruptedResultKind(err))
+				kind := interruptedResultKind(err)
+				c.Metrics.InterruptHTTPStream(kind)
+				slog.Warn("HTTP result stream interrupted", "kind", kind)
 			}
 			return
 		}

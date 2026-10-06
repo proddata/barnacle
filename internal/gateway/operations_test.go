@@ -56,6 +56,13 @@ func TestReadinessChecksConfiguredPostgresTransport(t *testing.T) {
 func TestMetricsCountHTTPStatusAndWebSockets(t *testing.T) {
 	m := &Metrics{}
 	handler := m.MeasureSQL(func(w http.ResponseWriter, r *http.Request) {
+		if !r.URL.Query().Has("fail") {
+			inFlight := httptest.NewRecorder()
+			m.Serve(inFlight, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+			if !strings.Contains(inFlight.Body.String(), "barnacle_http_sql_active 1\n") {
+				t.Fatalf("active request missing from metrics:\n%s", inFlight.Body.String())
+			}
+		}
 		if r.URL.Query().Has("fail") {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
@@ -65,19 +72,25 @@ func TestMetricsCountHTTPStatusAndWebSockets(t *testing.T) {
 	for _, path := range []string{"/sql", "/sql?fail"} {
 		handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path, nil))
 	}
-	m.websocketActive.Add(2)
+	m.OpenWebSocket()
+	m.OpenWebSocket()
+	m.CloseWebSocket()
 	m.RejectHTTPQuery()
 	m.RejectUpstream()
 	m.UpstreamFailure()
+	m.InterruptHTTPStream("result_limit")
+	m.InterruptHTTPStream("unexpected")
 	response := httptest.NewRecorder()
 	m.Serve(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	for _, line := range []string{
-		"barnacle_websocket_active 2", "barnacle_sql_requests_total 2",
+		"barnacle_websocket_active 1", "barnacle_websocket_connections_total 2", "barnacle_http_sql_active 0", "barnacle_sql_requests_total 2",
 		"barnacle_sql_errors_total 1", "barnacle_sql_duration_seconds_bucket{le=\"+Inf\"} 2",
 		"barnacle_sql_duration_seconds_count 2",
 		"barnacle_limit_rejections_total{limit=\"http_queries\"} 1",
 		"barnacle_limit_rejections_total{limit=\"upstream_connections\"} 1",
 		"barnacle_upstream_connection_failures_total 1",
+		"barnacle_sql_stream_interruptions_total{kind=\"result_limit\"} 1",
+		"barnacle_sql_stream_interruptions_total{kind=\"query_or_transport\"} 1",
 	} {
 		if !strings.Contains(response.Body.String(), line+"\n") {
 			t.Fatalf("metrics missing %q:\n%s", line, response.Body.String())

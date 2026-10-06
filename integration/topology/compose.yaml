@@ -29,8 +29,6 @@ services:
       BARNACLE_PG_TLS_SERVER_NAME: postgres
       BARNACLE_PG_CA_FILE: /pgcerts/ca.crt
       BARNACLE_PG_QUERY_EXEC_MODE: exec
-      BARNACLE_PG_USER: barnacle
-      BARNACLE_PG_DATABASE: barnacle
       GOMEMLIMIT: 160MiB
     volumes:
       - pgcerts:/pgcerts:ro

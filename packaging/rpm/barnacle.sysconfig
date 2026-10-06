@@ -3,9 +3,10 @@ BARNACLE_LISTEN=127.0.0.1:8080
 BARNACLE_PG_ADDR=127.0.0.1:5432
 BARNACLE_PG_SSLMODE=require
 # BARNACLE_PG_CA_FILE=/etc/barnacle/postgres-ca.crt
-BARNACLE_PG_USER=postgres
-BARNACLE_PG_DATABASE=postgres
 BARNACLE_MAX_CONNECTIONS=32
+# Set both to serve metrics on a separate loopback listener.
+# BARNACLE_METRICS=true
+# BARNACLE_METRICS_LISTEN=127.0.0.1:9090
 # BARNACLE_HTTP_READ_TIMEOUT=15s
 # BARNACLE_HTTP_IDLE_TIMEOUT=60s
 # Set both values to require RFC 9068 access tokens before HTTP or WebSocket reaches PostgreSQL.

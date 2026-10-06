@@ -4,6 +4,7 @@ import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import './style.css';
 import { COLUMNS_SQL, TABLES_SQL, closeQuerySession, openQuerySession, executeBatch, executeQuery, quoteIdentifier, safeError, safeJSON } from './db.js';
 import { splitStatements } from './statements.js';
+import { startMetrics } from './metrics.js';
 
 self.MonacoEnvironment = { getWorker() { return new EditorWorker(); } };
 
@@ -24,6 +25,27 @@ const batchToggle = $('http-batch');
 const statusMessage = $('status-message');
 const statusMeta = $('status-meta');
 const connectionBadge = $('connection-badge');
+let metricsStarted = false;
+
+function showPage() {
+  const metricsVisible = location.hash === '#metrics';
+  const metricsView = $('metrics-view');
+  metricsView.hidden = !metricsVisible;
+  workbench.hidden = metricsVisible;
+  $('connection-panel').hidden = metricsVisible;
+  document.querySelector('.development-warning').hidden = metricsVisible;
+  $('run-query').hidden = metricsVisible;
+  for (const [id, active] of [['nav-workbench', !metricsVisible], ['nav-metrics', metricsVisible]]) {
+    const link = $(id);
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
+  if (metricsVisible) {
+    if (!metricsStarted) { startMetrics(); metricsStarted = true; }
+    else $('refresh-metrics').click();
+  } else requestAnimationFrame(() => editor.layout());
+}
 const fields = Object.fromEntries(['connection-name', 'host', 'database', 'username', 'password', 'token', 'method', 'auth-method'].map((id) => [id, $(id)]));
 
 const PROFILE_KEY = 'barnacle-console-connections-v1';
@@ -203,6 +225,12 @@ function updateMethodFields() {
   $('token-field').hidden = method !== 'http-bearer';
   $('auth-method-field').hidden = method !== 'http-password';
   $('http-batch-field').hidden = method === 'ws-password';
+  renderConnectionSummary();
+}
+
+function renderConnectionSummary() {
+  $('connection-description').textContent = `${fields.host.value || 'Host'} / ${fields.database.value || 'Database'} · ${fields.username.value || 'User'}`;
+  $('connection-method-summary').textContent = ({ 'ws-password': 'WebSocket · Password', 'http-password': 'HTTP · Password', 'http-bearer': 'HTTP · Bearer' })[fields.method.value] ?? fields.method.value;
 }
 
 function setRunBusy(value) {
@@ -228,6 +256,8 @@ function activateTab(id) {
   updateRunLabel();
   renderTabs();
   renderResult();
+  const traceId = tab.results[tab.selectedResultIndex]?.traceId;
+  if (traceId && traces.some((trace) => trace.id === traceId)) selectTrace(traceId, false);
   renderConnectionInfo();
   showResultView(tab.resultView);
   editor.focus();
@@ -266,12 +296,17 @@ function renderConnectionInfo() {
   const session = activeTab()?.session;
   const websocket = fields.method.value === 'ws-password';
   const state = websocket ? session?.status ?? 'disconnected' : 'disconnected';
-  startupState.textContent = websocket ? ({ connecting: 'Connecting…', connected: 'Connected', failed: 'Failed', disconnected: 'Disconnected' })[state] : 'HTTP transport';
-  startupState.className = `session-state ${state}`;
-  $('session-controls').hidden = !websocket;
+  startupState.textContent = websocket ? ({ connecting: 'Connecting…', connected: 'Connected', failed: 'Failed', disconnected: 'Disconnected' })[state] : 'HTTP ready';
+  $('session-summary').className = `session-summary ${websocket ? state : ''}`;
+  $('connect-session').hidden = !websocket || state === 'connected';
+  $('disconnect-session').hidden = !websocket || state !== 'connected';
   $('connect-session').disabled = busy || state === 'connecting' || state === 'connected';
   $('disconnect-session').disabled = busy || (state !== 'connected' && state !== 'failed');
+  const failedTransaction = websocket && state === 'connected' && session?.transactionStatus === 'E';
+  $('transaction-alert').hidden = !failedTransaction;
+  $('rollback-transaction').disabled = busy;
   if (websocket) setConnectionState(state === 'connected' ? 'connected' : state === 'failed' ? 'failed' : '', `${startupState.textContent} · ${fields.host.value} / ${fields.database.value}`);
+  else setConnectionState('', `HTTP · ${fields.host.value} / ${fields.database.value}`);
   if (fields.method.value !== 'ws-password' || !session?.client || !session.connection) {
     const empty = document.createElement('p'); empty.className = 'startup-empty';
     empty.textContent = fields.method.value === 'ws-password'
@@ -311,11 +346,38 @@ function selectedStatements() {
 
 function reportTrace(trace) {
   const index = traces.findIndex((item) => item.id === trace.id);
-  if (index < 0) traces.unshift(trace); else traces[index] = trace;
-  traces = traces.slice(0, 40);
+  if (index < 0) traces.push(trace); else traces[index] = trace;
+  traces = traces.slice(-40);
   if (selectedTraceId === null || index < 0) selectedTraceId = trace.id;
   renderTraceList();
   renderTraceDetail();
+  if (index < 0) traceList.scrollTop = traceList.scrollHeight;
+}
+
+function operationLabel(trace) {
+  const sql = trace.sql ?? trace.statements?.[0];
+  if (!sql) return trace.purpose === 'batch' ? 'Batch' : trace.purpose;
+  const clean = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*--[^\n]*(?:\n|$)/gm, ' ').trim().replace(/\s+/g, ' ');
+  const suffix = trace.statements?.length > 1 ? ` + ${trace.statements.length - 1} more` : '';
+  return `${clean || trace.purpose}${suffix}`;
+}
+
+function durationLabel(ms) {
+  return ms === null || ms === undefined ? '…' : ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`;
+}
+
+function selectTrace(id, linkResult = true) {
+  selectedTraceId = id;
+  const trace = traces.find((item) => item.id === id);
+  if (linkResult && trace?.tabId) {
+    const tab = tabs.find((item) => item.id === trace.tabId);
+    if (tab && tab.connectionId === activeConnectionId && tab.results[trace.resultIndex]?.traceId === id) {
+      if (activeTabId !== tab.id) activateTab(tab.id);
+      tab.selectedResultIndex = trace.resultIndex;
+      renderResult();
+    }
+  }
+  renderTraceList(); renderTraceDetail();
 }
 
 function renderTraceList() {
@@ -328,13 +390,13 @@ function renderTraceList() {
   for (const trace of traces) {
     const item = document.createElement('button');
     item.type = 'button'; item.className = `trace-item ${trace.id === selectedTraceId ? 'active' : ''}`;
-    const copy = document.createElement('span');
-    const title = document.createElement('strong'); title.textContent = `${trace.transport} · ${trace.purpose === 'query' ? 'Query' : trace.purpose}`;
-    const detail = document.createElement('small'); detail.textContent = `${trace.startedAt} · ${trace.durationMs ?? '…'} ms${trace.connectionReused ? ' · reused connection' : ''}`;
     const state = document.createElement('span'); state.className = `trace-status ${trace.state}`;
     state.textContent = trace.state === 'success' ? '✓' : trace.state === 'error' ? '!' : '…';
-    copy.append(title, detail); item.append(copy, state);
-    item.addEventListener('click', () => { selectedTraceId = trace.id; renderTraceList(); renderTraceDetail(); });
+    const method = document.createElement('span'); method.className = 'trace-method'; method.textContent = `${trace.transport === 'WebSocket' ? 'WS' : 'HTTP'} · ${trace.purpose === 'query' ? 'query' : trace.purpose}`;
+    const operation = document.createElement('span'); operation.className = 'trace-operation'; operation.textContent = operationLabel(trace); operation.title = operation.textContent;
+    const duration = document.createElement('span'); duration.className = 'trace-duration'; duration.textContent = durationLabel(trace.durationMs);
+    item.append(state, method, operation, duration);
+    item.addEventListener('click', () => selectTrace(trace.id));
     traceList.append(item);
   }
 }
@@ -365,14 +427,15 @@ function renderTraceDetail() {
   const trace = traces.find((item) => item.id === selectedTraceId);
   traceDetail.replaceChildren(); traceDetail.hidden = !trace;
   if (!trace) return;
-  const title = document.createElement('p'); title.className = 'detail-title'; title.textContent = trace.api;
+  const title = document.createElement('p'); title.className = 'detail-title'; title.textContent = operationLabel(trace);
   const meta = document.createElement('p'); meta.className = 'detail-meta';
-  meta.textContent = `${trace.transport} · ${trace.endpoint} · ${trace.state}${trace.durationMs === null ? '' : ` · ${trace.durationMs} ms`}`;
+  meta.textContent = `${trace.transport} · ${trace.api}${trace.connectionReused ? ' · reused connection' : ''} · ${durationLabel(trace.durationMs)}`;
   traceDetail.append(title, meta);
+  const endpoint = document.createElement('p'); endpoint.className = 'detail-endpoint'; endpoint.textContent = trace.endpoint; traceDetail.append(endpoint);
   if (trace.request?.headers) {
     appendHeaders(traceDetail, trace.request.headers);
-    appendDetailSection(traceDetail, 'Request body (sent)', trace.request.body, true);
-  } else if (trace.request) appendDetailSection(traceDetail, 'PostgreSQL operation', trace.request);
+    appendDetailSection(traceDetail, 'Request', trace.request.body, true);
+  } else if (trace.request) appendDetailSection(traceDetail, 'Request', trace.request);
   else appendDetailSection(traceDetail, 'Request', 'Preparing request…');
   if (trace.response) appendDetailSection(traceDetail, 'Response', trace.response);
 }
@@ -400,7 +463,7 @@ function renderStatementResults() {
     button.ariaSelected = String(index === tab.selectedResultIndex);
     button.textContent = `${index + 1}. ${result.command ?? (result.error ? 'Error' : 'Result')}`;
     button.title = result.sql;
-    button.addEventListener('click', () => { tab.selectedResultIndex = index; renderResult(); });
+    button.addEventListener('click', () => { tab.selectedResultIndex = index; renderResult(); if (result.traceId && traces.some((trace) => trace.id === result.traceId)) selectTrace(result.traceId, false); });
     strip.append(button);
   });
 }
@@ -497,13 +560,15 @@ async function runCurrent() {
   setStatus(`Running ${statements.length} statement${statements.length === 1 ? '' : 's'}…`);
   for (const [index, statement] of statements.entries()) {
     const started = performance.now();
+    let traceId = null;
+    const captureTrace = (trace) => { traceId = trace.id; reportTrace({ ...trace, tabId: tab.id, resultIndex: index }); };
     try {
-      const result = await executeQuery(current, statement.sql, [], reportTrace, 'query', tab.session);
-      tab.results.push({ ...result, sql: statement.sql, durationMs: Math.round(performance.now() - started) });
+      const result = await executeQuery(current, statement.sql, [], captureTrace, 'query', tab.session);
+      tab.results.push({ ...result, sql: statement.sql, traceId, durationMs: Math.round(performance.now() - started) });
       if (current.method !== 'ws-password') setConnectionState('connected', `${current.host} / ${current.database}`);
     } catch (error) {
       const message = safeError(error, current);
-      tab.results.push({ sql: statement.sql, error: message, durationMs: Math.round(performance.now() - started) });
+      tab.results.push({ sql: statement.sql, traceId, error: message, durationMs: Math.round(performance.now() - started) });
       tab.selectedResultIndex = index;
       setStatus(`Statement ${index + 1} failed`, message);
       if (current.method !== 'ws-password') setConnectionState('failed', `${current.host} / ${current.database}`);
@@ -511,7 +576,7 @@ async function runCurrent() {
     }
     tab.selectedResultIndex = index;
     setStatus(`Completed ${index + 1} of ${statements.length}`, `${current.host} / ${current.database}`);
-    if (activeTabId === tab.id) renderResult();
+    if (activeTabId === tab.id) { renderResult(); if (traceId) selectTrace(traceId, false); }
   }
   setRunBusy(false);
   if (activeTabId === tab.id) { renderResult(); showResultView('data'); }
@@ -523,21 +588,23 @@ async function runHTTPBatch(statements, tab, current) {
   tab.results = []; tab.selectedResultIndex = 0;
   setStatus(`Running ${statements.length} statements in one HTTP transaction…`);
   const started = performance.now();
+  let traceId = null;
+  const captureTrace = (trace) => { traceId = trace.id; reportTrace({ ...trace, tabId: tab.id, resultIndex: 0 }); };
   try {
-    const results = await executeBatch(current, statements.map((statement) => statement.sql), reportTrace);
+    const results = await executeBatch(current, statements.map((statement) => statement.sql), captureTrace);
     const durationMs = Math.round(performance.now() - started);
-    tab.results = results.map((result, index) => ({ ...result, sql: statements[index].sql, durationMs }));
+    tab.results = results.map((result, index) => ({ ...result, sql: statements[index].sql, traceId, durationMs }));
     tab.selectedResultIndex = results.length - 1;
     setStatus(`HTTP transaction completed · ${results.length} results`, `${current.host} / ${current.database}`);
     setConnectionState('connected', `${current.host} / ${current.database}`);
   } catch (error) {
     const message = safeError(error, current);
-    tab.results = [{ sql: 'HTTP transaction', error: message, durationMs: Math.round(performance.now() - started) }];
+    tab.results = [{ sql: 'HTTP transaction', traceId, error: message, durationMs: Math.round(performance.now() - started) }];
     setStatus('HTTP transaction failed', message);
     setConnectionState('failed', `${current.host} / ${current.database}`);
   } finally {
     setRunBusy(false);
-    if (activeTabId === tab.id) { renderResult(); showResultView('data'); }
+    if (activeTabId === tab.id) { renderResult(); showResultView('data'); if (traceId) selectTrace(traceId, false); }
   }
 }
 
@@ -722,9 +789,36 @@ async function disconnectSession() {
   }
 }
 
+async function rollbackTransaction() {
+  if (busy || fields.method.value !== 'ws-password') return;
+  const tab = activeTab();
+  if (!tab || tab.session.status !== 'connected' || tab.session.transactionStatus !== 'E') return;
+  const current = settings();
+  const index = tab.results.length;
+  let traceId = null;
+  const captureTrace = (trace) => { traceId = trace.id; reportTrace({ ...trace, tabId: tab.id, resultIndex: index }); };
+  setRunBusy(true);
+  setStatus('Rolling back failed transaction…');
+  const started = performance.now();
+  try {
+    const result = await executeQuery(current, 'ROLLBACK;', [], captureTrace, 'query', tab.session);
+    tab.results.push({ ...result, sql: 'ROLLBACK;', traceId, durationMs: Math.round(performance.now() - started) });
+    setStatus('Transaction rolled back', `${current.host} / ${current.database}`);
+  } catch (error) {
+    const message = safeError(error, current);
+    tab.results.push({ sql: 'ROLLBACK;', traceId, error: message, durationMs: Math.round(performance.now() - started) });
+    setStatus('Rollback failed', message);
+  } finally {
+    tab.selectedResultIndex = index;
+    setRunBusy(false);
+    if (activeTabId === tab.id) { renderResult(); if (traceId) selectTrace(traceId, false); }
+  }
+}
+
 $('run-query').addEventListener('click', () => runCurrent());
 $('connect-session').addEventListener('click', () => connectSession());
 $('disconnect-session').addEventListener('click', disconnectSession);
+$('rollback-transaction').addEventListener('click', rollbackTransaction);
 $('refresh-schema').addEventListener('click', refreshSchema);
 $('tree-filter').addEventListener('input', renderTree);
 $('new-tab').addEventListener('click', () => createTab());
@@ -748,10 +842,22 @@ $('export-csv').addEventListener('click', exportCSV);
 $('toggle-explorer').addEventListener('click', () => togglePanel('left'));
 $('toggle-debug').addEventListener('click', () => togglePanel('right'));
 $('toggle-connection').addEventListener('click', () => {
-  const panel = $('connection-panel'); panel.hidden = !panel.hidden;
-  $('toggle-connection').ariaExpanded = String(!panel.hidden);
+  const details = $('connection-details'); details.hidden = !details.hidden;
+  $('toggle-connection').ariaExpanded = String(!details.hidden);
   requestAnimationFrame(() => editor.layout());
 });
+function showSideTab(name) {
+  const explorer = name === 'explorer';
+  $('explorer-content').hidden = !explorer;
+  $('session-content').hidden = explorer;
+  $('refresh-schema').hidden = !explorer;
+  for (const [id, selected] of [['show-explorer', explorer], ['show-session', !explorer]]) {
+    $(id).classList.toggle('active', selected);
+    $(id).ariaSelected = String(selected);
+  }
+}
+$('show-explorer').addEventListener('click', () => showSideTab('explorer'));
+$('show-session').addEventListener('click', () => showSideTab('session'));
 function connectionChanged(event) {
   if (event.target.id !== 'connection-name') {
     for (const tab of tabs.filter((item) => item.connectionId === activeConnectionId)) void closeQuerySession(tab.session);
@@ -760,6 +866,7 @@ function connectionChanged(event) {
       (fields.host.value !== 'postgres:5432' || fields.database.value !== 'barnacle' || fields.username.value !== 'barnacle') &&
       fields.password.value === 'barnacle_dev_password') fields.password.value = '';
   saveProfileFromFields(); renderConnectionSelect();
+  renderConnectionSummary();
   setConnectionState('', 'Connection changed');
   renderConnectionInfo();
   schemaRows = []; columnsCache.clear(); renderTree();
@@ -798,3 +905,5 @@ setupResize('resize-left', 'left');
 setupResize('resize-right', 'right');
 setupResize('resize-results', 'results');
 showConnection(activeConnectionId);
+addEventListener('hashchange', showPage);
+showPage();

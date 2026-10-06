@@ -9,7 +9,7 @@ This tracks Barnacle's API compatibility and production release gates. Compatibi
 | `POST /sql` single query | Parameterized query and Neon-shaped result | `integration/neon.test.mjs` |
 | `POST /sql` batch | One transaction with an array of results | `integration/neon.test.mjs` |
 | HTTP bearer header | OAUTHBEARER is required with Barnacle's OIDC gate; without it, pgx can use OAUTHBEARER or legacy password authentication | `integration/neon.test.mjs`, `integration/oauth/run.mjs` |
-| `GET /v2` and `/v1` WebSocket | Binary PostgreSQL wire tunnel; SCRAM login tested | `integration/neon.test.mjs`, `ws_test.go` |
+| `GET /v2` WebSocket | Binary PostgreSQL wire tunnel; SCRAM login tested | `integration/neon.test.mjs`, `ws_test.go` |
 | `OPTIONS /sql` | Browser preflight for configured origin | `sql.go` |
 | `GET /healthz` | Process liveness | `main.go` |
 | Optional upstream routing | HTTP connection-string host and WebSocket `?address=` select an exact allowed address | `routing_test.go`, `integration/routing.mjs` |

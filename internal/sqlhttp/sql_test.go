@@ -32,7 +32,7 @@ func TestDBErrorIdentifiesTLSVerificationFailure(t *testing.T) {
 }
 
 func TestConnectionConfigLocksUpstreamAndForwardsBearer(t *testing.T) {
-	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGUser: "default_user", PGDatabase: "default_db", PGSSLMode: "disable"}}
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable"}}
 	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
 	req.Header.Set("Neon-Connection-String", "postgres://app@remote.example:6543/appdb")
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -49,6 +49,90 @@ func TestConnectionConfigLocksUpstreamAndForwardsBearer(t *testing.T) {
 	token, err := pgcfg.OAuthTokenProvider(context.Background())
 	if err != nil || token != "test-token" {
 		t.Fatalf("OAuth token = %q, %v", token, err)
+	}
+}
+
+func TestNativeConnectionHeaderAndBodyOptions(t *testing.T) {
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable"}}
+	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
+	req.Header.Set("Neon-Connection-String", "postgres://app:secret@remote.example/appdb")
+	pgcfg, err := cfg.connectionConfig(req)
+	if err != nil || pgcfg.User != "app" || pgcfg.Database != "appdb" {
+		t.Fatalf("Neon header alias = %#v, %v", pgcfg, err)
+	}
+	req.Header.Del("Neon-Connection-String")
+	req.Header.Set("Connection-String", "postgres://app:secret@remote.example/appdb")
+	pgcfg, err = cfg.connectionConfig(req)
+	if err != nil || pgcfg.User != "app" || pgcfg.Database != "appdb" {
+		t.Fatalf("native connection = %#v, %v", pgcfg, err)
+	}
+	req.Header.Set("Neon-Connection-String", "postgres://app:secret@remote.example/appdb")
+	if _, err := cfg.connectionConfig(req); err == nil || !strings.Contains(err.Error(), "one connection header") {
+		t.Fatalf("accepted duplicate connection headers: %v", err)
+	}
+	req.Header.Set("Neon-Array-Mode", "true")
+	req.Header.Set("Neon-Batch-Read-Only", "true")
+	rawText, isolation := true, "Serializable"
+	options, err := optionsForRequest(req, queryRequest{Options: &queryOptions{RawText: &rawText, IsolationLevel: &isolation}}, true)
+	if err != nil || !options.arrayMode || !options.rawText || options.tx.AccessMode != pgx.ReadOnly || options.tx.IsoLevel != pgx.Serializable {
+		t.Fatalf("native options = %#v, %v", options, err)
+	}
+	arrayMode := false
+	if _, err := optionsForRequest(req, queryRequest{Options: &queryOptions{ArrayMode: &arrayMode}}, true); err == nil {
+		t.Fatal("accepted conflicting array mode aliases")
+	}
+	neon := httptest.NewRequest("POST", "http://localhost/sql", nil)
+	options, err = optionsForRequest(neon, queryRequest{Options: &queryOptions{RawText: &rawText}}, true)
+	if err != nil || options.arrayMode || !options.rawText {
+		t.Fatalf("Neon options changed = %#v, %v", options, err)
+	}
+	neon.Header.Set("Array-Mode", "true")
+	neon.Header.Set("Batch-Read-Only", "true")
+	options, err = optionsForRequest(neon, queryRequest{}, true)
+	if err != nil || !options.arrayMode || options.tx.AccessMode != pgx.ReadOnly {
+		t.Fatalf("native header options = %#v, %v", options, err)
+	}
+	neon.Header.Set("Neon-Array-Mode", "false")
+	if _, err := optionsForRequest(neon, queryRequest{}, true); err == nil {
+		t.Fatal("accepted duplicate native and Neon header aliases")
+	}
+	neon.Header.Del("Neon-Array-Mode")
+	neon.Header.Set("Array-Mode", "yes")
+	if _, err := optionsForRequest(neon, queryRequest{}, true); err == nil {
+		t.Fatal("accepted invalid boolean header")
+	}
+}
+
+func TestConnectionConfigBasicAuth(t *testing.T) {
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable"}}
+	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
+	req.Header.Set("Connection-String", "postgres://remote.example/appdb")
+	req.SetBasicAuth("app", "secret")
+	pgcfg, err := cfg.connectionConfig(req)
+	if err != nil || pgcfg.User != "app" || pgcfg.Password != "secret" || pgcfg.Database != "appdb" || pgcfg.Host != "127.0.0.1" || pgcfg.OAuthTokenProvider != nil {
+		t.Fatalf("Basic connection config = %#v, %v", pgcfg, err)
+	}
+	req.Header.Set("Connection-String", "postgres://app:other@remote.example/appdb")
+	if _, err := cfg.connectionConfig(req); err == nil {
+		t.Fatal("accepted Basic credentials with URL credentials")
+	}
+	req.Header.Set("Connection-String", "postgres://remote.example/appdb")
+	for _, malformed := range []string{"Basic", "Basic ", "Basic invalid", "Digest anything"} {
+		req.Header.Set("Authorization", malformed)
+		if _, err := cfg.connectionConfig(req); err == nil {
+			t.Errorf("accepted malformed Authorization %q", malformed)
+		}
+	}
+}
+
+func TestConnectionBodyIsRejected(t *testing.T) {
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable"}}
+	req := httptest.NewRequest("POST", "http://localhost/sql", strings.NewReader(`{"connection":{"host":"remote.example","database":"appdb"},"query":"select 1"}`))
+	req.Header.Set("Connection-String", "postgres://app:secret@remote.example/appdb")
+	response := httptest.NewRecorder()
+	cfg.Serve(response, req)
+	if response.Code != 400 || !strings.Contains(response.Body.String(), "connection must be supplied") {
+		t.Fatalf("connection body response = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -86,14 +170,24 @@ func TestConnectionConfigQueryExecMode(t *testing.T) {
 	}
 }
 func TestConnectionConfigRequiresCredential(t *testing.T) {
-	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGUser: "app", PGDatabase: "app", PGSSLMode: "disable"}}
+	cfg := Handler{Config: &gateway.Config{PGAddr: "127.0.0.1:5432", PGSSLMode: "disable"}}
 	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
 	if _, err := cfg.connectionConfig(req); err == nil {
 		t.Fatal("accepted anonymous request")
 	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	if _, err := cfg.connectionConfig(req); err == nil {
+		t.Fatal("accepted bearer request without connection string")
+	}
+	req.Header.Del("Authorization")
 	req.Header.Set("Neon-Connection-String", "postgres://app@remote.example/app")
 	if _, err := cfg.connectionConfig(req); err == nil {
 		t.Fatal("accepted passwordless connection string")
+	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Neon-Connection-String", "postgres://app@remote.example/")
+	if _, err := cfg.connectionConfig(req); err == nil {
+		t.Fatal("accepted connection string without database")
 	}
 }
 func TestConnectionConfigRejectsCredentialOverridesAndFileOptions(t *testing.T) {
