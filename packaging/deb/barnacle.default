@@ -1,0 +1,6 @@
+# Restrict this listener to a local ingress by default.
+BARNACLE_LISTEN=127.0.0.1:8080
+BARNACLE_PG_ADDR=127.0.0.1:5432
+BARNACLE_PG_SSLMODE=require
+# BARNACLE_PG_CA_FILE=/etc/barnacle/pg-ca.pem
+# BARNACLE_METRICS=true

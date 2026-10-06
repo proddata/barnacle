@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Client, neon, neonConfig } from '@neondatabase/serverless';
 import WebSocket from 'ws';
 
-const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
+const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080';
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL for the integration suite');
 const endpoint = new URL(base);
@@ -40,7 +40,7 @@ function namedUrl(name) {
 }
 
 test('aborted HTTP request stops its PostgreSQL query', async () => {
-  const name = `hermit_http_cancel_${process.pid}`;
+  const name = `barnacle_http_cancel_${process.pid}`;
   const controller = new AbortController();
   const request = fetch(`${base}/sql`, {
     method: 'POST',
@@ -60,7 +60,7 @@ test('aborted HTTP request stops its PostgreSQL query', async () => {
 });
 
 test('PostgreSQL CancelRequest crosses a second WebSocket connection', async () => {
-  const name = `hermit_ws_cancel_${process.pid}`;
+  const name = `barnacle_ws_cancel_${process.pid}`;
   const client = new Client(namedUrl(name));
   await client.connect();
   try {
@@ -96,9 +96,9 @@ test('PostgreSQL CancelRequest crosses a second WebSocket connection', async () 
 });
 
 test('abrupt WebSocket disconnect releases its PostgreSQL session', {
-  skip: process.env.HERMIT_TEST_PGBOUNCER === '1' && 'PgBouncer may retain the idle PostgreSQL backend after the client disconnects',
+  skip: process.env.BARNACLE_TEST_PGBOUNCER === '1' && 'PgBouncer may retain the idle PostgreSQL backend after the client disconnects',
 }, async () => {
-  const name = `hermit_ws_disconnect_${process.pid}`;
+  const name = `barnacle_ws_disconnect_${process.pid}`;
   const client = new Client(namedUrl(name));
   client.on('error', () => {}); // Expected when the test terminates its socket.
   await client.connect();

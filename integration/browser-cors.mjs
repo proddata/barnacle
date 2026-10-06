@@ -8,8 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const binary = process.env.HERMIT_BROWSER_BINARY;
-if (!binary) throw new Error('Set HERMIT_BROWSER_BINARY');
+const binary = process.env.BARNACLE_BROWSER_BINARY;
+if (!binary) throw new Error('Set BARNACLE_BROWSER_BINARY');
 const chrome = [
   process.env.CHROME_BIN,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -68,9 +68,9 @@ const secondAllowedPort = await listen(secondAllowedPage);
 const deniedPage = createHTTPServer();
 const deniedPort = await listen(deniedPage);
 const endpoint = createTCPServer();
-const hermitPort = await listen(endpoint);
+const barnaclePort = await listen(endpoint);
 await close(endpoint);
-const target = `http://127.0.0.1:${hermitPort}`;
+const target = `http://127.0.0.1:${barnaclePort}`;
 allowedPage.on('request', (_, response) => {
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
   response.end(page(target));
@@ -86,19 +86,19 @@ deniedPage.on('request', (_, response) => {
 const child = spawn(binary, [], {
   env: {
     ...process.env,
-    HERMIT_LISTEN: `127.0.0.1:${hermitPort}`,
-    HERMIT_PG_ADDR: `127.0.0.1:${mockPort}`,
-    HERMIT_PG_SSLMODE: 'disable',
-    HERMIT_ALLOWED_ORIGIN: `http://127.0.0.1:${allowedPort}, http://127.0.0.1:${secondAllowedPort}`,
-    HERMIT_OIDC_ISSUER: '',
-    HERMIT_OIDC_AUDIENCE: '',
+    BARNACLE_LISTEN: `127.0.0.1:${barnaclePort}`,
+    BARNACLE_PG_ADDR: `127.0.0.1:${mockPort}`,
+    BARNACLE_PG_SSLMODE: 'disable',
+    BARNACLE_ALLOWED_ORIGIN: `http://127.0.0.1:${allowedPort}, http://127.0.0.1:${secondAllowedPort}`,
+    BARNACLE_OIDC_ISSUER: '',
+    BARNACLE_OIDC_AUDIENCE: '',
   },
   stdio: 'ignore',
 });
 const profiles = [];
 
 async function browserResult(port) {
-  const profile = await mkdtemp(join(tmpdir(), 'hermit-chrome-'));
+  const profile = await mkdtemp(join(tmpdir(), 'barnacle-chrome-'));
   profiles.push(profile);
   const browser = spawn(chrome, [
     '--headless=new', '--no-first-run', '--disable-gpu',
@@ -172,7 +172,7 @@ try {
     } catch { /* The listener is still starting. */ }
     await delay(50);
   }
-  assert.ok(ready, 'Hermit did not start for browser CORS test');
+  assert.ok(ready, 'Barnacle did not start for browser CORS test');
 
   for (const [port, expected] of [
     [allowedPort, 'http:400 ws:open'],

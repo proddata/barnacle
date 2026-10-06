@@ -3,7 +3,7 @@ import { Client, neon, neonConfig } from '@neondatabase/serverless';
 neonConfig.fetchEndpoint = `${location.origin}/sql`;
 neonConfig.wsProxy = `${location.host}/v2`;
 neonConfig.useSecureWebSocket = location.protocol === 'https:';
-neonConfig.forceDisablePgSSL = true; // Hermit verifies TLS on its upstream connection.
+neonConfig.forceDisablePgSSL = true; // Barnacle verifies TLS on its upstream connection.
 neonConfig.pipelineConnect = false; // Let PostgreSQL challenge SCRAM or MD5 logins.
 
 let nextTraceId = 0;
@@ -115,12 +115,72 @@ function resultPreview(result) {
 
 export async function closeQuerySession(session) {
   const client = session?.client;
-  if (!client) return;
+  if (!session) return;
   session.client = null;
   session.url = null;
   session.connection = null;
+  session.status = 'disconnected';
+  session.error = '';
   session.onChange?.();
-  await client.end().catch(() => {});
+  if (client) await client.end().catch(() => {});
+}
+
+export async function openQuerySession(settings, session) {
+  if (!session) throw new Error('A query tab is required for a WebSocket connection.');
+  if (settings.method !== 'ws-password') throw new Error('Select WebSocket transport to connect.');
+  const url = connectionString(settings);
+  if (session.client && session.url === url && session.status === 'connected') return session.client;
+  if (session.client) await closeQuerySession(session);
+  const client = new Client({ connectionString: url });
+  const connection = { parameters: [], backendProcessID: null };
+  session.client = client;
+  session.url = url;
+  session.connection = null;
+  session.status = 'connecting';
+  session.error = '';
+  session.onChange?.();
+  const onParameterStatus = ({ parameterName, parameterValue }) => {
+    connection.parameters.push({ name: parameterName, value: parameterValue });
+  };
+  const onBackendKeyData = ({ processID }) => { connection.backendProcessID = processID; };
+  client.connection.on('parameterStatus', onParameterStatus);
+  client.connection.on('backendKeyData', onBackendKeyData);
+  const forgetClosedSession = () => {
+    if (session.client !== client) return;
+    if (session.status === 'connecting') return;
+    session.client = null;
+    session.url = null;
+    session.connection = null;
+    session.status = 'disconnected';
+    session.onChange?.();
+  };
+  client.on('error', forgetClosedSession);
+  client.on('end', forgetClosedSession);
+  try {
+    await client.connect();
+    if (session.client !== client) {
+      await client.end().catch(() => {});
+      throw new Error('Connection was closed while connecting.');
+    }
+    session.connection = connection;
+    session.status = 'connected';
+    session.onChange?.();
+    return client;
+  } catch (error) {
+    if (session.client === client) {
+      session.client = null;
+      session.url = null;
+      session.connection = null;
+      session.status = 'failed';
+      session.error = safeError(error, settings);
+      session.onChange?.();
+    }
+    await client.end().catch(() => {});
+    throw error;
+  } finally {
+    client.connection.off('parameterStatus', onParameterStatus);
+    client.connection.off('backendKeyData', onBackendKeyData);
+  }
 }
 
 export async function executeQuery(settings, sql, params = [], report = () => {}, purpose = 'query', session = null) {
@@ -147,44 +207,11 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
   try {
     let result;
     if (websocket) {
-      if (session?.client && session.url !== url) await closeQuerySession(session);
-      let client = session?.client;
-      const newConnection = !client;
-      if (newConnection) {
-        client = new Client({ connectionString: url });
-        const connection = { parameters: [], backendProcessID: null };
-        const onParameterStatus = ({ parameterName, parameterValue }) => {
-          connection.parameters.push({ name: parameterName, value: parameterValue });
-        };
-        const onBackendKeyData = ({ processID }) => { connection.backendProcessID = processID; };
-        client.connection.on('parameterStatus', onParameterStatus);
-        client.connection.on('backendKeyData', onBackendKeyData);
-        const forgetClosedSession = () => {
-          if (session?.client === client) {
-            session.client = null;
-            session.url = null;
-            session.connection = null;
-            session.onChange?.();
-          }
-        };
-        client.on('error', forgetClosedSession);
-        client.on('end', forgetClosedSession);
-        try {
-          await client.connect();
-        } catch (error) {
-          await client.end().catch(() => {});
-          throw error;
-        } finally {
-          client.connection.off('parameterStatus', onParameterStatus);
-          client.connection.off('backendKeyData', onBackendKeyData);
-        }
-        if (session) {
-          session.client = client;
-          session.url = url;
-          session.connection = connection;
-          session.onChange?.();
-        }
-      } else {
+      const existingConnection = session?.client && session.url === url && session.status === 'connected';
+      const client = session ? await openQuerySession(settings, session) : await openQuerySession(settings, {
+        onChange: null,
+      });
+      if (existingConnection) {
         trace.api = 'Client.query() (existing session)';
         trace.connectionReused = true;
       }

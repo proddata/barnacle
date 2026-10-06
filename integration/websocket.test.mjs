@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import { Client, Pool, neon, neonConfig } from '@neondatabase/serverless';
 import WebSocket from 'ws';
 
-const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
+const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080';
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL for the integration suite');
 const endpoint = new URL(base);
@@ -21,7 +21,7 @@ neonConfig.forceDisablePgSSL = true;
 neonConfig.poolQueryViaFetch = false;
 const observer = neon(databaseUrl);
 let sequence = 0;
-function unique(prefix) { return `hermit_${prefix}_${process.pid}_${++sequence}`; }
+function unique(prefix) { return `barnacle_${prefix}_${process.pid}_${++sequence}`; }
 function namedUrl(name) {
   const url = new URL(databaseUrl);
   url.searchParams.set('application_name', name);
@@ -61,8 +61,8 @@ test('WebSocket responds to ping and completes the close handshake', async () =>
       socket.once('pong', resolve);
       socket.once('error', reject);
     });
-    socket.ping('hermit');
-    assert.deepEqual(await within(pong, 'pong'), Buffer.from('hermit'));
+    socket.ping('barnacle');
+    assert.deepEqual(await within(pong, 'pong'), Buffer.from('barnacle'));
     const closed = new Promise((resolve, reject) => {
       socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
       socket.once('error', reject);
@@ -142,9 +142,9 @@ test('Client preserves SET, named prepared statements, and cursors', async () =>
     query.values = [8];
     assert.equal((await client.query(query)).rows[0].value, 10);
     await client.query('BEGIN');
-    await client.query('DECLARE hermit_cursor CURSOR FOR SELECT generate_series(1, 3) AS value');
-    assert.deepEqual((await client.query('FETCH 2 FROM hermit_cursor')).rows.map(row => row.value), [1, 2]);
-    assert.deepEqual((await client.query('FETCH ALL FROM hermit_cursor')).rows.map(row => row.value), [3]);
+    await client.query('DECLARE barnacle_cursor CURSOR FOR SELECT generate_series(1, 3) AS value');
+    assert.deepEqual((await client.query('FETCH 2 FROM barnacle_cursor')).rows.map(row => row.value), [1, 2]);
+    assert.deepEqual((await client.query('FETCH ALL FROM barnacle_cursor')).rows.map(row => row.value), [3]);
     await client.query('COMMIT');
   } finally {
     await client.end();
@@ -204,17 +204,17 @@ test('published Client has no COPY stream API and stays usable after COPY', asyn
   }
 });
 
-test('idle timeout disconnects Client and releases its PostgreSQL backend', { skip: !process.env.HERMIT_WS_IDLE_BINARY && !process.env.HERMIT_WS_IDLE_BASE_URL }, async () => {
+test('idle timeout disconnects Client and releases its PostgreSQL backend', { skip: !process.env.BARNACLE_WS_IDLE_BINARY && !process.env.BARNACLE_WS_IDLE_BASE_URL }, async () => {
   let child;
-  let idleBase = process.env.HERMIT_WS_IDLE_BASE_URL;
+  let idleBase = process.env.BARNACLE_WS_IDLE_BASE_URL;
   if (!idleBase) {
     const server = createServer();
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
     await new Promise(resolve => server.close(resolve));
     idleBase = `http://127.0.0.1:${port}`;
-    child = spawn(process.env.HERMIT_WS_IDLE_BINARY, [], {
-      env: { ...process.env, HERMIT_LISTEN: `127.0.0.1:${port}`, HERMIT_WS_IDLE_TIMEOUT: '700ms' },
+    child = spawn(process.env.BARNACLE_WS_IDLE_BINARY, [], {
+      env: { ...process.env, BARNACLE_LISTEN: `127.0.0.1:${port}`, BARNACLE_WS_IDLE_TIMEOUT: '700ms' },
       stdio: 'ignore',
     });
   }

@@ -1,5 +1,5 @@
 [Unit]
-Description=Hermit PostgreSQL HTTP and WebSocket proxy
+Description=Barnacle PostgreSQL HTTP and WebSocket proxy
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60s
@@ -7,8 +7,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/default/hermit
-ExecStart=/usr/bin/hermit
+EnvironmentFile=-/etc/sysconfig/barnacle
+ExecStart=/usr/bin/barnacle
 DynamicUser=yes
 Restart=on-failure
 RestartSec=5s

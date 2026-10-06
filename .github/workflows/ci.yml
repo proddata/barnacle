@@ -21,13 +21,13 @@ jobs:
       postgres:
         image: postgres:${{ matrix.postgres }}-alpine
         env:
-          POSTGRES_USER: hermit
-          POSTGRES_PASSWORD: hermit_dev_password
-          POSTGRES_DB: hermit
+          POSTGRES_USER: barnacle
+          POSTGRES_PASSWORD: barnacle_dev_password
+          POSTGRES_DB: barnacle
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-cmd "pg_isready -U barnacle -d barnacle"
           --health-interval 2s
           --health-timeout 2s
           --health-retries 15
@@ -44,11 +44,11 @@ jobs:
       - run: npm ci --prefix integration
       - name: Neon driver integration tests
         env:
-          HERMIT_PG_ADDR: 127.0.0.1:5432
-          HERMIT_PG_SSLMODE: disable
-          HERMIT_PG_USER: hermit
-          HERMIT_PG_DATABASE: hermit
-          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@localhost:5432/hermit
+          BARNACLE_PG_ADDR: 127.0.0.1:5432
+          BARNACLE_PG_SSLMODE: disable
+          BARNACLE_PG_USER: barnacle
+          BARNACLE_PG_DATABASE: barnacle
+          TEST_DATABASE_URL: postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle
         run: ./integration/run.sh
 
   ubuntu:
@@ -57,13 +57,13 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: hermit
-          POSTGRES_PASSWORD: hermit_dev_password
-          POSTGRES_DB: hermit
+          POSTGRES_USER: barnacle
+          POSTGRES_PASSWORD: barnacle_dev_password
+          POSTGRES_DB: barnacle
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-cmd "pg_isready -U barnacle -d barnacle"
           --health-interval 2s
           --health-timeout 2s
           --health-retries 15
@@ -89,30 +89,30 @@ jobs:
         run: npm audit --prefix integration --omit=dev --audit-level=high
       - name: Neon driver integration tests
         env:
-          HERMIT_BROWSER_CORS: '1'
-          HERMIT_PG_ADDR: 127.0.0.1:5432
-          HERMIT_PG_SSLMODE: disable
-          HERMIT_PG_USER: hermit
-          HERMIT_PG_DATABASE: hermit
-          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@localhost:5432/hermit
+          BARNACLE_BROWSER_CORS: '1'
+          BARNACLE_PG_ADDR: 127.0.0.1:5432
+          BARNACLE_PG_SSLMODE: disable
+          BARNACLE_PG_USER: barnacle
+          BARNACLE_PG_DATABASE: barnacle
+          TEST_DATABASE_URL: postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle
         run: ./integration/run.sh
       - name: Neon driver request-based routing
         env:
-          HERMIT_PG_ADDR: ''
-          HERMIT_PG_ALLOWED_ADDRS: 127.0.0.1:5432
-          HERMIT_PG_SSLMODE: disable
-          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@127.0.0.1:5432/hermit
-          HERMIT_ROUTING_ONLY: '1'
+          BARNACLE_PG_ADDR: ''
+          BARNACLE_PG_ALLOWED_ADDRS: 127.0.0.1:5432
+          BARNACLE_PG_SSLMODE: disable
+          TEST_DATABASE_URL: postgres://barnacle:barnacle_dev_password@127.0.0.1:5432/barnacle
+          BARNACLE_ROUTING_ONLY: '1'
         run: ./integration/run.sh
       - name: Direct and PgBouncer routes on one host
         run: |
           sudo apt-get update
           sudo apt-get install -y pgbouncer postgresql-client
           sudo systemctl stop pgbouncer || true
-          printf '"hermit" "hermit_dev_password"\n' > "$RUNNER_TEMP/pgbouncer-users.txt"
+          printf '"barnacle" "barnacle_dev_password"\n' > "$RUNNER_TEMP/pgbouncer-users.txt"
           cat > "$RUNNER_TEMP/pgbouncer.ini" <<EOF
           [databases]
-          hermit = host=127.0.0.1 port=5432 dbname=hermit
+          barnacle = host=127.0.0.1 port=5432 dbname=barnacle
           [pgbouncer]
           listen_addr = 127.0.0.1
           listen_port = 6432
@@ -126,30 +126,30 @@ jobs:
           pooler_pid=$!
           trap 'kill "$pooler_pid" 2>/dev/null || true; wait "$pooler_pid" 2>/dev/null || true' EXIT
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if pg_isready -h 127.0.0.1 -p 6432 -U hermit -d hermit >/dev/null; then break; fi
+            if pg_isready -h 127.0.0.1 -p 6432 -U barnacle -d barnacle >/dev/null; then break; fi
             sleep 1
           done
-          HERMIT_PG_ADDR=127.0.0.1:6432 \
-          HERMIT_PG_ALLOWED_ADDRS=127.0.0.1:5432,127.0.0.1:6432 \
-          HERMIT_PG_SSLMODE=disable \
-          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@127.0.0.1:5432/hermit \
-          TEST_SECOND_DATABASE_URL=postgres://hermit:hermit_dev_password@127.0.0.1:6432/hermit \
-          HERMIT_ROUTING_ONLY=1 ./integration/run.sh || { cat "$RUNNER_TEMP/pgbouncer.log"; exit 1; }
+          BARNACLE_PG_ADDR=127.0.0.1:6432 \
+          BARNACLE_PG_ALLOWED_ADDRS=127.0.0.1:5432,127.0.0.1:6432 \
+          BARNACLE_PG_SSLMODE=disable \
+          TEST_DATABASE_URL=postgres://barnacle:barnacle_dev_password@127.0.0.1:5432/barnacle \
+          TEST_SECOND_DATABASE_URL=postgres://barnacle:barnacle_dev_password@127.0.0.1:6432/barnacle \
+          BARNACLE_ROUTING_ONLY=1 ./integration/run.sh || { cat "$RUNNER_TEMP/pgbouncer.log"; exit 1; }
       - run: docker compose config --quiet
       - name: PgBouncer pool modes
         run: ./integration/pgbouncer/run.sh
-      - run: docker build -t hermit:ci .
+      - run: docker build -t barnacle:ci .
       - name: Container vulnerability scan
         run: |
-          docker save -o "$RUNNER_TEMP/hermit-ci.tar" hermit:ci
+          docker save -o "$RUNNER_TEMP/barnacle-ci.tar" barnacle:ci
           docker run --rm -v "$RUNNER_TEMP:/scan:ro" aquasec/trivy:0.75.0 image \
-            --input /scan/hermit-ci.tar --scanners vuln --severity HIGH,CRITICAL \
+            --input /scan/barnacle-ci.tar --scanners vuln --severity HIGH,CRITICAL \
             --exit-code 1 --no-progress
       - name: PostgreSQL TLS in Compose
         run: |
           trap 'docker compose down' EXIT
           docker compose up --build -d
-          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@postgres:5432/hermit node integration/pg-tls.mjs
+          TEST_DATABASE_URL=postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle node integration/pg-tls.mjs
       - name: HTTPS and WSS through HAProxy
         run: ./integration/tls/run.sh
 
@@ -160,11 +160,11 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: hermit
-          POSTGRES_PASSWORD: hermit_dev_password
-          POSTGRES_DB: hermit
+          POSTGRES_USER: barnacle
+          POSTGRES_PASSWORD: barnacle_dev_password
+          POSTGRES_DB: barnacle
         options: >-
-          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-cmd "pg_isready -U barnacle -d barnacle"
           --health-interval 2s
           --health-timeout 2s
           --health-retries 15
@@ -176,11 +176,11 @@ jobs:
       - run: npm ci --prefix integration
       - name: Neon driver integration tests on Fedora
         env:
-          HERMIT_PG_ADDR: postgres:5432
-          HERMIT_PG_SSLMODE: disable
-          HERMIT_PG_USER: hermit
-          HERMIT_PG_DATABASE: hermit
-          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@postgres:5432/hermit
+          BARNACLE_PG_ADDR: postgres:5432
+          BARNACLE_PG_SSLMODE: disable
+          BARNACLE_PG_USER: barnacle
+          BARNACLE_PG_DATABASE: barnacle
+          TEST_DATABASE_URL: postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle
         run: ./integration/run.sh
 
   private-upstream-topologies:
@@ -217,11 +217,11 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: hermit
-          POSTGRES_PASSWORD: hermit_dev_password
-          POSTGRES_DB: hermit
+          POSTGRES_USER: barnacle
+          POSTGRES_PASSWORD: barnacle_dev_password
+          POSTGRES_DB: barnacle
         options: >-
-          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-cmd "pg_isready -U barnacle -d barnacle"
           --health-interval 2s
           --health-timeout 2s
           --health-retries 15
@@ -232,29 +232,29 @@ jobs:
         run: ./packaging/rpm/build.sh
       - name: Inspect RPM contents
         run: |
-          test "$(rpm -qp --qf '%{ARCH}' dist/hermit-*.rpm)" = '${{ matrix.arch }}'
-          rpm -qpl dist/hermit-*.rpm
-          rpm -qpl dist/hermit-*.rpm | grep -q '/usr/bin/hermit'
-          rpm -qpl dist/hermit-*.rpm | grep -q '/hermit.service'
-          rpm -qpl dist/hermit-*.rpm | grep -q '/THIRD-PARTY-NOTICES.md'
-          rpm -qpl dist/hermit-*.rpm | grep -q '/THIRD-PARTY-LICENSES/'
-          ! rpm -qpl dist/hermit-*.rpm | grep -q '/console/'
+          test "$(rpm -qp --qf '%{ARCH}' dist/barnacle-*.rpm)" = '${{ matrix.arch }}'
+          rpm -qpl dist/barnacle-*.rpm
+          rpm -qpl dist/barnacle-*.rpm | grep -q '/usr/bin/barnacle'
+          rpm -qpl dist/barnacle-*.rpm | grep -q '/barnacle.service'
+          rpm -qpl dist/barnacle-*.rpm | grep -q '/THIRD-PARTY-NOTICES.md'
+          rpm -qpl dist/barnacle-*.rpm | grep -q '/THIRD-PARTY-LICENSES/'
+          ! rpm -qpl dist/barnacle-*.rpm | grep -q '/console/'
       - name: Install and smoke-test RPM
         run: |
-          dnf install -y dist/hermit-*.rpm
-          rpm -V hermit
-          systemd-analyze verify hermit.service
+          dnf install -y dist/barnacle-*.rpm
+          rpm -V barnacle
+          systemd-analyze verify barnacle.service
       - run: npm ci --prefix integration
       - name: Query through installed RPM
         env:
-          HERMIT_PG_ADDR: postgres:5432
-          HERMIT_PG_SSLMODE: disable
-          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@postgres:5432/hermit
-        run: ./integration/release-smoke.sh /usr/bin/hermit
+          BARNACLE_PG_ADDR: postgres:5432
+          BARNACLE_PG_SSLMODE: disable
+          TEST_DATABASE_URL: postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle
+        run: ./integration/release-smoke.sh /usr/bin/barnacle
       - uses: actions/upload-artifact@v7
         with:
-          name: hermit-fedora-rpm-${{ matrix.arch }}
-          path: dist/hermit-*.rpm
+          name: barnacle-fedora-rpm-${{ matrix.arch }}
+          path: dist/barnacle-*.rpm
 
   fedora-service:
     runs-on: ubuntu-24.04-arm
@@ -263,10 +263,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
-          name: hermit-fedora-rpm-aarch64
+          name: barnacle-fedora-rpm-aarch64
           path: dist
       - name: Verify fixed-user systemd variant
-        run: ./integration/fedora-service/run.sh dist/hermit-*.rpm
+        run: ./integration/fedora-service/run.sh dist/barnacle-*.rpm
 
   release-artifacts:
     runs-on: ubuntu-latest
@@ -274,13 +274,13 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: hermit
-          POSTGRES_PASSWORD: hermit_dev_password
-          POSTGRES_DB: hermit
+          POSTGRES_USER: barnacle
+          POSTGRES_PASSWORD: barnacle_dev_password
+          POSTGRES_DB: barnacle
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-cmd "pg_isready -U barnacle -d barnacle"
           --health-interval 2s
           --health-timeout 2s
           --health-retries 15
@@ -300,70 +300,70 @@ jobs:
       - name: Build and inspect Debian packages
         run: |
           ./packaging/deb/build.sh
-          dpkg-deb --info dist/hermit_*_amd64.deb
-          dpkg-deb --contents dist/hermit_*_amd64.deb | grep -q '/usr/bin/hermit'
-          sudo dpkg -i dist/hermit_*_amd64.deb
-          systemd-analyze verify /usr/lib/systemd/system/hermit.service
+          dpkg-deb --info dist/barnacle_*_amd64.deb
+          dpkg-deb --contents dist/barnacle_*_amd64.deb | grep -q '/usr/bin/barnacle'
+          sudo dpkg -i dist/barnacle_*_amd64.deb
+          systemd-analyze verify /usr/lib/systemd/system/barnacle.service
       - name: Query through installed Debian package
         env:
-          HERMIT_PG_ADDR: 127.0.0.1:5432
-          HERMIT_PG_SSLMODE: disable
-          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@localhost:5432/hermit
+          BARNACLE_PG_ADDR: 127.0.0.1:5432
+          BARNACLE_PG_SSLMODE: disable
+          TEST_DATABASE_URL: postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle
         run: |
-          cmp dist/hermit-linux-amd64 /usr/bin/hermit
-          ./integration/release-smoke.sh /usr/bin/hermit
+          cmp dist/barnacle-linux-amd64 /usr/bin/barnacle
+          ./integration/release-smoke.sh /usr/bin/barnacle
       - name: Build and query through binary-based container
         run: |
-          docker build --file Dockerfile.release --platform linux/amd64 -t hermit:release-ci .
-          docker run --rm -d --name hermit-release-ci --network host \
-            -e HERMIT_LISTEN=127.0.0.1:18081 \
-            -e HERMIT_PG_ADDR=127.0.0.1:5432 \
-            -e HERMIT_PG_SSLMODE=disable \
-            hermit:release-ci
-          trap 'docker stop hermit-release-ci >/dev/null 2>&1 || true' EXIT
+          docker build --file Dockerfile.release --platform linux/amd64 -t barnacle:release-ci .
+          docker run --rm -d --name barnacle-release-ci --network host \
+            -e BARNACLE_LISTEN=127.0.0.1:18081 \
+            -e BARNACLE_PG_ADDR=127.0.0.1:5432 \
+            -e BARNACLE_PG_SSLMODE=disable \
+            barnacle:release-ci
+          trap 'docker stop barnacle-release-ci >/dev/null 2>&1 || true' EXIT
           ready=0
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             if curl --silent --fail http://127.0.0.1:18081/healthz >/dev/null; then ready=1; break; fi
             sleep 1
           done
-          if [ "$ready" -ne 1 ]; then docker logs hermit-release-ci; exit 1; fi
-          HERMIT_BASE_URL=http://127.0.0.1:18081 \
-          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit \
-            node integration/release-smoke.mjs || { docker logs hermit-release-ci; exit 1; }
-          docker stop hermit-release-ci >/dev/null
-          docker run --rm -d --name hermit-release-ci-unavailable --network host \
-            -e HERMIT_LISTEN=127.0.0.1:18082 \
-            -e HERMIT_PG_ADDR=127.0.0.1:1 \
-            -e HERMIT_PG_SSLMODE=disable \
-            hermit:release-ci
-          trap 'docker stop hermit-release-ci-unavailable >/dev/null 2>&1 || true' EXIT
+          if [ "$ready" -ne 1 ]; then docker logs barnacle-release-ci; exit 1; fi
+          BARNACLE_BASE_URL=http://127.0.0.1:18081 \
+          TEST_DATABASE_URL=postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle \
+            node integration/release-smoke.mjs || { docker logs barnacle-release-ci; exit 1; }
+          docker stop barnacle-release-ci >/dev/null
+          docker run --rm -d --name barnacle-release-ci-unavailable --network host \
+            -e BARNACLE_LISTEN=127.0.0.1:18082 \
+            -e BARNACLE_PG_ADDR=127.0.0.1:1 \
+            -e BARNACLE_PG_SSLMODE=disable \
+            barnacle:release-ci
+          trap 'docker stop barnacle-release-ci-unavailable >/dev/null 2>&1 || true' EXIT
           ready=0
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             if curl --silent --fail http://127.0.0.1:18082/healthz >/dev/null; then ready=1; break; fi
             sleep 1
           done
-          if [ "$ready" -ne 1 ]; then docker logs hermit-release-ci-unavailable; exit 1; fi
-          HERMIT_SMOKE_UNREACHABLE=1 \
-          HERMIT_BASE_URL=http://127.0.0.1:18082 \
-          TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@localhost:5432/hermit \
-            node integration/release-smoke.mjs || { docker logs hermit-release-ci-unavailable; exit 1; }
+          if [ "$ready" -ne 1 ]; then docker logs barnacle-release-ci-unavailable; exit 1; fi
+          BARNACLE_SMOKE_UNREACHABLE=1 \
+          BARNACLE_BASE_URL=http://127.0.0.1:18082 \
+          TEST_DATABASE_URL=postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle \
+            node integration/release-smoke.mjs || { docker logs barnacle-release-ci-unavailable; exit 1; }
       - name: Scan binary-based container
         run: |
-          docker save -o "$RUNNER_TEMP/hermit-release-ci.tar" hermit:release-ci
+          docker save -o "$RUNNER_TEMP/barnacle-release-ci.tar" barnacle:release-ci
           docker run --rm -v "$RUNNER_TEMP:/scan:ro" aquasec/trivy:0.75.0 image \
-            --input /scan/hermit-release-ci.tar --scanners vuln --severity HIGH,CRITICAL \
+            --input /scan/barnacle-release-ci.tar --scanners vuln --severity HIGH,CRITICAL \
             --exit-code 1 --no-progress
       - name: Build attested OCI image archive
         run: ./packaging/release/image.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: hermit-release-candidate
+          name: barnacle-release-candidate
           path: |
-            dist/hermit-linux-amd64
-            dist/hermit-linux-arm64
+            dist/barnacle-linux-amd64
+            dist/barnacle-linux-arm64
             dist/SHA256SUMS
-            dist/hermit_*.deb
-            dist/hermit-image.oci.tar
+            dist/barnacle_*.deb
+            dist/barnacle-image.oci.tar
 
   oauth-postgres18:
     runs-on: ubuntu-latest

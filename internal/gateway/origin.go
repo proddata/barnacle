@@ -28,7 +28,7 @@ func ParseTrustedProxies(raw string) ([]netip.Prefix, error) {
 			prefix, err = netip.ParsePrefix(entry)
 		}
 		if entry == "" || err != nil || !prefix.IsValid() || prefix.Bits() == 0 || prefix.Addr().Zone() != "" || prefix.Addr().Is4In6() {
-			return nil, fmt.Errorf("HERMIT_TRUSTED_PROXIES entry %d %q must be an IP address or CIDR prefix", index+1, entry)
+			return nil, fmt.Errorf("BARNACLE_TRUSTED_PROXIES entry %d %q must be an IP address or CIDR prefix", index+1, entry)
 		}
 		prefixes = append(prefixes, prefix.Masked())
 	}
@@ -44,7 +44,7 @@ func ParseAllowedOrigins(raw string) (map[string]struct{}, error) {
 		origin := strings.TrimSpace(part)
 		parsed, err := url.Parse(origin)
 		if origin == "" || err != nil || !validConfiguredOrigin(origin, parsed) {
-			return nil, fmt.Errorf("HERMIT_ALLOWED_ORIGIN entry %d %q must be an exact http(s) origin without a path, query, fragment, or wildcard", index+1, origin)
+			return nil, fmt.Errorf("BARNACLE_ALLOWED_ORIGIN entry %d %q must be an exact http(s) origin without a path, query, fragment, or wildcard", index+1, origin)
 		}
 		origins[origin] = struct{}{}
 	}

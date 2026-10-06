@@ -5,12 +5,12 @@ import test, { after, before } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { neon, neonConfig } from '@neondatabase/serverless';
 
-const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
+const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080';
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL for the integration suite');
 neonConfig.fetchEndpoint = `${base}/sql`;
 const sql = neon(databaseUrl);
-const table = `hermit_batch_atomicity_${process.pid}_${Math.random().toString(36).slice(2, 10)}`;
+const table = `barnacle_batch_atomicity_${process.pid}_${Math.random().toString(36).slice(2, 10)}`;
 
 async function batch(queries, options = {}) {
   const response = await fetch(`${options.base || base}/sql`, {
@@ -40,7 +40,7 @@ async function configuredGateway(baseEnv, overrides) {
   if (process.env[baseEnv]) {
     return { base: process.env[baseEnv], close: async () => {} };
   }
-  const binary = process.env.HERMIT_BATCH_BINARY;
+  const binary = process.env.BARNACLE_BATCH_BINARY;
   if (!binary) return null;
   const reservation = createServer();
   await new Promise((resolve, reject) => reservation.listen(0, '127.0.0.1', (error) => error ? reject(error) : resolve()));
@@ -48,14 +48,14 @@ async function configuredGateway(baseEnv, overrides) {
   await new Promise((resolve) => reservation.close(resolve));
   const base = `http://127.0.0.1:${port}`;
   const child = spawn(binary, [], {
-    env: { ...process.env, HERMIT_LISTEN: `127.0.0.1:${port}`, ...overrides },
+    env: { ...process.env, BARNACLE_LISTEN: `127.0.0.1:${port}`, ...overrides },
     stdio: 'ignore',
   });
   const exit = new Promise((resolve) => child.once('exit', resolve));
   try {
     await waitUntil(async () => {
       try { return (await fetch(`${base}/healthz`)).ok; } catch { return false; }
-    }, 'short-deadline Hermit did not start');
+    }, 'short-deadline Barnacle did not start');
   } catch (error) {
     child.kill('SIGTERM');
     await exit;
@@ -87,12 +87,12 @@ test('a statement timeout rolls back an earlier batch write', async () => {
   assert.equal(await count(label), 0);
 });
 
-test('Hermit request deadline rolls back an earlier batch write', {
-  skip: !process.env.HERMIT_BATCH_BINARY && !process.env.HERMIT_BATCH_TIMEOUT_BASE_URL,
+test('Barnacle request deadline rolls back an earlier batch write', {
+  skip: !process.env.BARNACLE_BATCH_BINARY && !process.env.BARNACLE_BATCH_TIMEOUT_BASE_URL,
 }, async () => {
-  const gateway = await configuredGateway('HERMIT_BATCH_TIMEOUT_BASE_URL', { HERMIT_QUERY_TIMEOUT: '1500ms' });
+  const gateway = await configuredGateway('BARNACLE_BATCH_TIMEOUT_BASE_URL', { BARNACLE_QUERY_TIMEOUT: '1500ms' });
   const label = 'gateway_timeout';
-  const name = `hermit_batch_deadline_${process.pid}`;
+  const name = `barnacle_batch_deadline_${process.pid}`;
   const url = new URL(databaseUrl);
   url.searchParams.set('application_name', name);
   try {
@@ -102,7 +102,7 @@ test('Hermit request deadline rolls back an earlier batch write', {
     await waitUntil(async () => {
       const rows = await sql.query('select count(*)::int as count from pg_stat_activity where application_name = $1 and state = $2', [name, 'active']);
       return rows[0].count === 1;
-    }, 'second batch query did not start before Hermit deadline');
+    }, 'second batch query did not start before Barnacle deadline');
     const response = await request;
     assert.notEqual(response.status, 200);
     await waitUntil(async () => {
@@ -116,9 +116,9 @@ test('Hermit request deadline rolls back an earlier batch write', {
 });
 
 test('final JSON response limit rolls back an earlier batch write', {
-  skip: !process.env.HERMIT_BATCH_BINARY && !process.env.HERMIT_BATCH_RESPONSE_BASE_URL,
+  skip: !process.env.BARNACLE_BATCH_BINARY && !process.env.BARNACLE_BATCH_RESPONSE_BASE_URL,
 }, async () => {
-  const gateway = await configuredGateway('HERMIT_BATCH_RESPONSE_BASE_URL', { HERMIT_HTTP_MAX_RESPONSE_MIB: '1' });
+  const gateway = await configuredGateway('BARNACLE_BATCH_RESPONSE_BASE_URL', { BARNACLE_HTTP_MAX_RESPONSE_MIB: '1' });
   const label = 'response_limit';
   try {
     const response = await batch([
@@ -126,7 +126,7 @@ test('final JSON response limit rolls back an earlier batch write', {
       "select repeat('x', 2 * 1048576) as payload",
     ], { base: gateway.base });
     assert.equal(response.status, 413);
-    assert.equal(response.body.code, 'HERMIT_ERROR');
+    assert.equal(response.body.code, 'BARNACLE_ERROR');
     assert.equal(await count(label), 0);
   } finally {
     await gateway.close();
@@ -135,7 +135,7 @@ test('final JSON response limit rolls back an earlier batch write', {
 
 test('client abort during a later batch query rolls back an earlier write', async () => {
   const label = 'client_abort';
-  const name = `hermit_batch_abort_${process.pid}`;
+  const name = `barnacle_batch_abort_${process.pid}`;
   const url = new URL(databaseUrl);
   url.searchParams.set('application_name', name);
   const controller = new AbortController();
@@ -167,7 +167,7 @@ test('result-limit failure rolls back an earlier batch write', async () => {
     ...Array.from({ length: 5 }, () => "select repeat('x', 1048576) as payload"),
   ]);
   assert.equal(response.status, 413);
-  assert.equal(response.body.code, 'HERMIT_ERROR');
+  assert.equal(response.body.code, 'BARNACLE_ERROR');
   assert.equal(await count(label), 0);
 });
 
@@ -202,6 +202,6 @@ test('HTTP rejects a connection-string request for simple protocol', async () =>
   url.searchParams.set('default_query_exec_mode', 'simple_protocol');
   const response = await batch(['select 1'], { connectionString: url.toString() });
   assert.equal(response.status, 400);
-  assert.equal(response.body.code, 'HERMIT_ERROR');
+  assert.equal(response.body.code, 'BARNACLE_ERROR');
   assert.match(response.body.message, /unsupported PostgreSQL connection option/);
 });

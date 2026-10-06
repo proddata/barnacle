@@ -19,9 +19,9 @@ if (!['http', 'ws'].includes(transport) || !Number.isInteger(rows) ||
   throw new Error('Use --transport=http|ws [--rows=100] [--row-mib=1]');
 }
 
-const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
+const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080';
 const databaseUrl = process.env.TEST_DATABASE_URL ||
-  'postgres://hermit:hermit_dev_password@localhost:5432/hermit';
+  'postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle';
 const endpoint = new URL(base);
 neonConfig.fetchEndpoint = `${base}/sql`;
 neonConfig.webSocketConstructor = WebSocket;
@@ -30,7 +30,7 @@ neonConfig.wsProxy = () => `${endpoint.host}/v2`;
 neonConfig.pipelineConnect = false;
 neonConfig.forceDisablePgSSL = true;
 
-const { stdout: idOutput } = await exec('docker', ['compose', 'ps', '-q', 'hermit'], { cwd: root });
+const { stdout: idOutput } = await exec('docker', ['compose', 'ps', '-q', 'barnacle'], { cwd: root });
 const containerId = idOutput.trim();
 if (!containerId) throw new Error('Start the Compose stack first: docker compose up --build -d');
 
@@ -101,8 +101,8 @@ const [limit, oomKilled, exitCode, running] = stateOutput.trim().split(/\s+/);
 const mib = (bytes) => bytes === null ? null : Number((bytes / 1024 ** 2).toFixed(1));
 console.log(JSON.stringify({ transport, requestedMiB: rows * rowMiB,
   resultMiB: mib(resultBytes), resultRows, success, durationSeconds: Number(durationSeconds.toFixed(2)),
-  hermitLimitMiB: mib(Number(limit)), hermitBaselineMiB: mib(baseline),
-  hermitSampledPeakMiB: mib(sampledPeak), hermitCgroupPeakMiB: mib(cgroupPeak),
+  barnacleLimitMiB: mib(Number(limit)), barnacleBaselineMiB: mib(baseline),
+  barnacleSampledPeakMiB: mib(sampledPeak), barnacleCgroupPeakMiB: mib(cgroupPeak),
   clientPeakMiB: mib(clientPeak), oomKilled: oomKilled === 'true',
   containerExitCode: Number(exitCode), containerRunning: running === 'true',
   ...(error ? { error } : {}) }));

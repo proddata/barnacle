@@ -25,7 +25,7 @@ jobs:
         run: |
           [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           version=${GITHUB_REF_NAME#v}
-          test "$version" = "$(awk '/^Version:/ { print $2; exit }' packaging/rpm/hermit.spec)"
+          test "$version" = "$(awk '/^Version:/ { print $2; exit }' packaging/rpm/barnacle.spec)"
           echo "number=$version" >> "$GITHUB_OUTPUT"
 
   sources:
@@ -45,8 +45,8 @@ jobs:
           name: release-sources
           if-no-files-found: error
           path: |
-            dist/hermit-${{ needs.version.outputs.number }}.tar.gz
-            dist/hermit-${{ needs.version.outputs.number }}-vendor.tar.gz
+            dist/barnacle-${{ needs.version.outputs.number }}.tar.gz
+            dist/barnacle-${{ needs.version.outputs.number }}-vendor.tar.gz
 
   binaries-packages-image:
     needs: version
@@ -68,10 +68,10 @@ jobs:
           name: release-built
           if-no-files-found: error
           path: |
-            dist/hermit-linux-amd64
-            dist/hermit-linux-arm64
-            dist/hermit_*.deb
-            dist/hermit-image.oci.tar
+            dist/barnacle-linux-amd64
+            dist/barnacle-linux-arm64
+            dist/barnacle_*.deb
+            dist/barnacle-image.oci.tar
 
   rpm:
     needs: [version, sources]
@@ -95,19 +95,19 @@ jobs:
           path: dist
       - name: Build RPM from published source archives
         env:
-          HERMIT_SOURCE_ARCHIVE_DIR: ${{ github.workspace }}/dist
+          BARNACLE_SOURCE_ARCHIVE_DIR: ${{ github.workspace }}/dist
         run: ./packaging/rpm/build.sh
       - name: Verify RPM
         run: |
-          test "$(rpm -qp --qf '%{ARCH}' dist/hermit-*.rpm)" = '${{ matrix.arch }}'
-          test "$(rpm -qp --qf '%{VERSION}' dist/hermit-*.rpm)" = '${{ needs.version.outputs.number }}'
-          dnf install -y dist/hermit-*.rpm
-          rpm -V hermit
+          test "$(rpm -qp --qf '%{ARCH}' dist/barnacle-*.rpm)" = '${{ matrix.arch }}'
+          test "$(rpm -qp --qf '%{VERSION}' dist/barnacle-*.rpm)" = '${{ needs.version.outputs.number }}'
+          dnf install -y dist/barnacle-*.rpm
+          rpm -V barnacle
       - uses: actions/upload-artifact@v7
         with:
           name: release-rpm-${{ matrix.arch }}
           if-no-files-found: error
-          path: dist/hermit-*.rpm
+          path: dist/barnacle-*.rpm
 
   publish:
     needs: [version, sources, binaries-packages-image, rpm]
@@ -127,13 +127,13 @@ jobs:
         run: |
           set -euo pipefail
           for arch in amd64 arm64; do
-            test -s "dist/hermit-linux-$arch"
-            test -s "dist/hermit_${VERSION}_${arch}.deb"
+            test -s "dist/barnacle-linux-$arch"
+            test -s "dist/barnacle_${VERSION}_${arch}.deb"
           done
-          test -s "dist/hermit-${VERSION}.tar.gz"
-          test -s "dist/hermit-${VERSION}-vendor.tar.gz"
-          test -s dist/hermit-image.oci.tar
-          test "$(find dist -maxdepth 1 -name 'hermit-*.rpm' | wc -l)" -eq 2
+          test -s "dist/barnacle-${VERSION}.tar.gz"
+          test -s "dist/barnacle-${VERSION}-vendor.tar.gz"
+          test -s dist/barnacle-image.oci.tar
+          test "$(find dist -maxdepth 1 -name 'barnacle-*.rpm' | wc -l)" -eq 2
           test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 9
           cd dist
           find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS

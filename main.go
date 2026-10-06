@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/proddata/hermit/internal/gateway"
-	"github.com/proddata/hermit/internal/pgws"
-	"github.com/proddata/hermit/internal/sqlhttp"
+	"github.com/proddata/barnacle/internal/gateway"
+	"github.com/proddata/barnacle/internal/pgws"
+	"github.com/proddata/barnacle/internal/sqlhttp"
 )
 
 func env(key, fallback string) string {
@@ -25,128 +25,128 @@ func env(key, fallback string) string {
 }
 
 func main() {
-	timeout, err := time.ParseDuration(env("HERMIT_QUERY_TIMEOUT", "30s"))
+	timeout, err := time.ParseDuration(env("BARNACLE_QUERY_TIMEOUT", "30s"))
 	if err != nil || timeout <= 0 {
-		slog.Error("invalid HERMIT_QUERY_TIMEOUT")
+		slog.Error("invalid BARNACLE_QUERY_TIMEOUT")
 		os.Exit(1)
 	}
-	httpReadTimeout, err := time.ParseDuration(env("HERMIT_HTTP_READ_TIMEOUT", "15s"))
+	httpReadTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_READ_TIMEOUT", "15s"))
 	if err != nil || httpReadTimeout <= 0 {
-		slog.Error("invalid HERMIT_HTTP_READ_TIMEOUT")
+		slog.Error("invalid BARNACLE_HTTP_READ_TIMEOUT")
 		os.Exit(1)
 	}
-	httpWriteTimeout, err := time.ParseDuration(env("HERMIT_HTTP_WRITE_TIMEOUT", "60s"))
+	httpWriteTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_WRITE_TIMEOUT", "60s"))
 	if err != nil || httpWriteTimeout <= 0 {
-		slog.Error("invalid HERMIT_HTTP_WRITE_TIMEOUT")
+		slog.Error("invalid BARNACLE_HTTP_WRITE_TIMEOUT")
 		os.Exit(1)
 	}
-	httpIdleTimeout, err := time.ParseDuration(env("HERMIT_HTTP_IDLE_TIMEOUT", "60s"))
+	httpIdleTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_IDLE_TIMEOUT", "60s"))
 	if err != nil || httpIdleTimeout <= 0 {
-		slog.Error("invalid HERMIT_HTTP_IDLE_TIMEOUT")
+		slog.Error("invalid BARNACLE_HTTP_IDLE_TIMEOUT")
 		os.Exit(1)
 	}
-	wsIdleTimeout, err := time.ParseDuration(env("HERMIT_WS_IDLE_TIMEOUT", "30m"))
+	wsIdleTimeout, err := time.ParseDuration(env("BARNACLE_WS_IDLE_TIMEOUT", "30m"))
 	if err != nil || wsIdleTimeout <= 0 {
-		slog.Error("invalid HERMIT_WS_IDLE_TIMEOUT")
+		slog.Error("invalid BARNACLE_WS_IDLE_TIMEOUT")
 		os.Exit(1)
 	}
-	wsWriteTimeout, err := time.ParseDuration(env("HERMIT_WS_WRITE_TIMEOUT", "30s"))
+	wsWriteTimeout, err := time.ParseDuration(env("BARNACLE_WS_WRITE_TIMEOUT", "30s"))
 	if err != nil || wsWriteTimeout <= 0 {
-		slog.Error("invalid HERMIT_WS_WRITE_TIMEOUT")
+		slog.Error("invalid BARNACLE_WS_WRITE_TIMEOUT")
 		os.Exit(1)
 	}
-	maxConnections, err := strconv.Atoi(env("HERMIT_MAX_CONNECTIONS", "32"))
+	maxConnections, err := strconv.Atoi(env("BARNACLE_MAX_CONNECTIONS", "32"))
 	if err != nil || maxConnections <= 0 {
-		slog.Error("invalid HERMIT_MAX_CONNECTIONS")
+		slog.Error("invalid BARNACLE_MAX_CONNECTIONS")
 		os.Exit(1)
 	}
-	maxHTTPQueries, err := positiveIntEnv("HERMIT_MAX_HTTP_QUERIES", 8)
+	maxHTTPQueries, err := positiveIntEnv("BARNACLE_MAX_HTTP_QUERIES", 8)
 	if err != nil || maxHTTPQueries > maxConnections {
-		slog.Error("invalid HERMIT_MAX_HTTP_QUERIES")
+		slog.Error("invalid BARNACLE_MAX_HTTP_QUERIES")
 		os.Exit(1)
 	}
-	maxHTTPRowMiB, err := positiveIntEnv("HERMIT_HTTP_MAX_ROW_MIB", 8)
+	maxHTTPRowMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_ROW_MIB", 8)
 	if err != nil {
-		slog.Error("invalid HERMIT_HTTP_MAX_ROW_MIB")
+		slog.Error("invalid BARNACLE_HTTP_MAX_ROW_MIB")
 		os.Exit(1)
 	}
-	maxHTTPBufferedMiB, err := positiveIntEnv("HERMIT_HTTP_MAX_BUFFERED_MIB", 4)
+	maxHTTPBufferedMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_BUFFERED_MIB", 4)
 	if err != nil {
-		slog.Error("invalid HERMIT_HTTP_MAX_BUFFERED_MIB")
+		slog.Error("invalid BARNACLE_HTTP_MAX_BUFFERED_MIB")
 		os.Exit(1)
 	}
-	maxHTTPResponseMiB, err := positiveIntEnv("HERMIT_HTTP_MAX_RESPONSE_MIB", 128)
+	maxHTTPResponseMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_RESPONSE_MIB", 128)
 	if err != nil {
-		slog.Error("invalid HERMIT_HTTP_MAX_RESPONSE_MIB")
+		slog.Error("invalid BARNACLE_HTTP_MAX_RESPONSE_MIB")
 		os.Exit(1)
 	}
-	allowedAddrs, err := gateway.ParseAllowedPGAddrs(os.Getenv("HERMIT_PG_ALLOWED_ADDRS"))
+	allowedAddrs, err := gateway.ParseAllowedPGAddrs(os.Getenv("BARNACLE_PG_ALLOWED_ADDRS"))
 	if err != nil {
 		slog.Error("invalid PostgreSQL routing configuration", "error", err)
 		os.Exit(1)
 	}
-	defaultPGAddr := os.Getenv("HERMIT_PG_ADDR")
+	defaultPGAddr := os.Getenv("BARNACLE_PG_ADDR")
 	if defaultPGAddr == "" && len(allowedAddrs) == 0 {
 		defaultPGAddr = "127.0.0.1:5432"
 	}
 	if defaultPGAddr != "" {
 		defaultPGAddr, err = gateway.CanonicalPGAddr(defaultPGAddr)
 		if err != nil {
-			slog.Error("invalid HERMIT_PG_ADDR", "error", err)
+			slog.Error("invalid BARNACLE_PG_ADDR", "error", err)
 			os.Exit(1)
 		}
 		if len(allowedAddrs) > 0 {
 			_, anyAllowed := allowedAddrs["*"]
 			if _, ok := allowedAddrs[defaultPGAddr]; !ok && !anyAllowed {
-				slog.Error("HERMIT_PG_ADDR must appear in HERMIT_PG_ALLOWED_ADDRS when routing is enabled")
+				slog.Error("BARNACLE_PG_ADDR must appear in BARNACLE_PG_ALLOWED_ADDRS when routing is enabled")
 				os.Exit(1)
 			}
 		}
 	}
-	readyPGAddr := os.Getenv("HERMIT_READY_PG_ADDR")
+	readyPGAddr := os.Getenv("BARNACLE_READY_PG_ADDR")
 	if readyPGAddr != "" {
 		readyPGAddr, err = gateway.CanonicalPGAddr(readyPGAddr)
 		if err != nil {
-			slog.Error("invalid HERMIT_READY_PG_ADDR", "error", err)
+			slog.Error("invalid BARNACLE_READY_PG_ADDR", "error", err)
 			os.Exit(1)
 		}
 	}
-	pgSSLMode := env("HERMIT_PG_SSLMODE", "require")
+	pgSSLMode := env("BARNACLE_PG_SSLMODE", "require")
 	if pgSSLMode != "require" && pgSSLMode != "disable" {
-		slog.Error("HERMIT_PG_SSLMODE must be require or disable")
+		slog.Error("BARNACLE_PG_SSLMODE must be require or disable")
 		os.Exit(1)
 	}
-	pgQueryExecMode := env("HERMIT_PG_QUERY_EXEC_MODE", "exec")
+	pgQueryExecMode := env("BARNACLE_PG_QUERY_EXEC_MODE", "exec")
 	if pgQueryExecMode != "exec" && pgQueryExecMode != "cache_describe" && pgQueryExecMode != "cache_statement" {
-		slog.Error("HERMIT_PG_QUERY_EXEC_MODE must be exec, cache_describe, or cache_statement")
+		slog.Error("BARNACLE_PG_QUERY_EXEC_MODE must be exec, cache_describe, or cache_statement")
 		os.Exit(1)
 	}
-	pgRootCAs, err := gateway.LoadPGRootCAs(os.Getenv("HERMIT_PG_CA_FILE"), os.Getenv("HERMIT_PG_EXTRA_CA_FILE"))
+	pgRootCAs, err := gateway.LoadPGRootCAs(os.Getenv("BARNACLE_PG_CA_FILE"), os.Getenv("BARNACLE_PG_EXTRA_CA_FILE"))
 	if err != nil {
-		slog.Error("invalid HERMIT_PG_CA_FILE", "error", err)
+		slog.Error("invalid BARNACLE_PG_CA_FILE", "error", err)
 		os.Exit(1)
 	}
-	allowedOrigins, err := gateway.ParseAllowedOrigins(os.Getenv("HERMIT_ALLOWED_ORIGIN"))
+	allowedOrigins, err := gateway.ParseAllowedOrigins(os.Getenv("BARNACLE_ALLOWED_ORIGIN"))
 	if err != nil {
-		slog.Error("invalid HERMIT_ALLOWED_ORIGIN", "error", err)
+		slog.Error("invalid BARNACLE_ALLOWED_ORIGIN", "error", err)
 		os.Exit(1)
 	}
-	trustedProxies, err := gateway.ParseTrustedProxies(os.Getenv("HERMIT_TRUSTED_PROXIES"))
+	trustedProxies, err := gateway.ParseTrustedProxies(os.Getenv("BARNACLE_TRUSTED_PROXIES"))
 	if err != nil {
-		slog.Error("invalid HERMIT_TRUSTED_PROXIES", "error", err)
+		slog.Error("invalid BARNACLE_TRUSTED_PROXIES", "error", err)
 		os.Exit(1)
 	}
 	cfg := gateway.Config{
-		Listen:               env("HERMIT_LISTEN", ":8080"),
+		Listen:               env("BARNACLE_LISTEN", ":8080"),
 		PGAddr:               defaultPGAddr,
 		ReadyPGAddr:          readyPGAddr,
 		PGAllowedAddrs:       allowedAddrs,
-		PGDatabase:           env("HERMIT_PG_DATABASE", "postgres"),
-		PGUser:               env("HERMIT_PG_USER", "postgres"),
-		PGPassword:           os.Getenv("HERMIT_PG_PASSWORD"),
+		PGDatabase:           env("BARNACLE_PG_DATABASE", "postgres"),
+		PGUser:               env("BARNACLE_PG_USER", "postgres"),
+		PGPassword:           os.Getenv("BARNACLE_PG_PASSWORD"),
 		PGSSLMode:            pgSSLMode,
 		PGQueryExecMode:      pgQueryExecMode,
-		PGTLSServerName:      os.Getenv("HERMIT_PG_TLS_SERVER_NAME"),
+		PGTLSServerName:      os.Getenv("BARNACLE_PG_TLS_SERVER_NAME"),
 		PGRootCAs:            pgRootCAs,
 		AllowedOrigins:       allowedOrigins,
 		TrustedProxies:       trustedProxies,
@@ -162,8 +162,8 @@ func main() {
 		MaxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
 		Metrics:              &gateway.Metrics{},
 	}
-	issuer := os.Getenv("HERMIT_OIDC_ISSUER")
-	audience := os.Getenv("HERMIT_OIDC_AUDIENCE")
+	issuer := os.Getenv("BARNACLE_OIDC_ISSUER")
+	audience := os.Getenv("BARNACLE_OIDC_AUDIENCE")
 	if issuer != "" || audience != "" {
 		cfg.OIDC, err = gateway.NewOIDCGate(context.Background(), issuer, audience, nil)
 		if err != nil {
@@ -178,7 +178,7 @@ func main() {
 	wsHandler := pgws.New(&cfg)
 	mux.HandleFunc("POST /sql", cfg.Metrics.MeasureSQL(sqlhttp.Gzip(sqlHandler.Serve)))
 	mux.HandleFunc("OPTIONS /sql", cfg.Preflight)
-	if strings.EqualFold(os.Getenv("HERMIT_METRICS"), "true") {
+	if strings.EqualFold(os.Getenv("BARNACLE_METRICS"), "true") {
 		mux.HandleFunc("GET /metrics", cfg.Metrics.Serve)
 	} else {
 		mux.HandleFunc("GET /metrics", http.NotFound)
@@ -211,7 +211,7 @@ func main() {
 		}
 		close(shutdownDone)
 	}()
-	slog.Info("hermit listening", "address", cfg.Listen, "postgres", cfg.PGAddr)
+	slog.Info("barnacle listening", "address", cfg.Listen, "postgres", cfg.PGAddr)
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		stop()
 		<-shutdownDone

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/proddata/hermit/internal/gateway"
+	"github.com/proddata/barnacle/internal/gateway"
 )
 
 func TestBackendKeyCaptureSkipsRowsAndHandlesSplitMessages(t *testing.T) {

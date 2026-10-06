@@ -15,7 +15,7 @@ func TestParseTrustedProxies(t *testing.T) {
 		}
 	}
 	for _, raw := range []string{" ", ",127.0.0.1", "127.0.0.1,", "*", "0.0.0.0/0", "::/0", "localhost", "127.0.0.1:80", "fe80::1%eth0", "::ffff:127.0.0.1/128", "10.0.0.0/33"} {
-		if _, err := ParseTrustedProxies(raw); err == nil || !strings.Contains(err.Error(), "HERMIT_TRUSTED_PROXIES entry") {
+		if _, err := ParseTrustedProxies(raw); err == nil || !strings.Contains(err.Error(), "BARNACLE_TRUSTED_PROXIES entry") {
 			t.Errorf("wanted startup error for %q, got %v", raw, err)
 		}
 	}
@@ -102,7 +102,7 @@ func TestParseAllowedOrigins(t *testing.T) {
 		"https://user@example.com", "https://example.com:99999", "https://example.com:",
 	} {
 		t.Run("invalid "+raw, func(t *testing.T) {
-			if _, err := ParseAllowedOrigins(raw); err == nil || !strings.Contains(err.Error(), "HERMIT_ALLOWED_ORIGIN entry") {
+			if _, err := ParseAllowedOrigins(raw); err == nil || !strings.Contains(err.Error(), "BARNACLE_ALLOWED_ORIGIN entry") {
 				t.Fatalf("wanted clear startup error for %q, got %v", raw, err)
 			}
 		})

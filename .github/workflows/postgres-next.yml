@@ -18,13 +18,13 @@ jobs:
         # Update this tag for each beta/RC, then move 19 into ci.yml after GA.
         image: postgres:19beta4-alpine
         env:
-          POSTGRES_USER: hermit
-          POSTGRES_PASSWORD: hermit_dev_password
-          POSTGRES_DB: hermit
+          POSTGRES_USER: barnacle
+          POSTGRES_PASSWORD: barnacle_dev_password
+          POSTGRES_DB: barnacle
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U hermit -d hermit"
+          --health-cmd "pg_isready -U barnacle -d barnacle"
           --health-interval 2s
           --health-timeout 2s
           --health-retries 15
@@ -41,9 +41,9 @@ jobs:
       - run: npm ci --prefix integration
       - name: Neon driver integration tests
         env:
-          HERMIT_PG_ADDR: 127.0.0.1:5432
-          HERMIT_PG_SSLMODE: disable
-          HERMIT_PG_USER: hermit
-          HERMIT_PG_DATABASE: hermit
-          TEST_DATABASE_URL: postgres://hermit:hermit_dev_password@localhost:5432/hermit
+          BARNACLE_PG_ADDR: 127.0.0.1:5432
+          BARNACLE_PG_SSLMODE: disable
+          BARNACLE_PG_USER: barnacle
+          BARNACLE_PG_DATABASE: barnacle
+          TEST_DATABASE_URL: postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle
         run: ./integration/run.sh

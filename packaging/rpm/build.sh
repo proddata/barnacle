@@ -5,7 +5,7 @@ command -v rpmbuild >/dev/null 2>&1 || { echo 'rpmbuild is required (dnf install
 command -v python3 >/dev/null 2>&1 || { echo 'python3 is required' >&2; exit 1; }
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-version=$(awk '/^Version:/ { print $2; exit }' "$repo_dir/packaging/rpm/hermit.spec")
+version=$(awk '/^Version:/ { print $2; exit }' "$repo_dir/packaging/rpm/barnacle.spec")
 case "$version" in ''|*[!0-9A-Za-z.~_+-]*) echo 'invalid RPM version' >&2; exit 1;; esac
 
 build_dir=$(mktemp -d)
@@ -15,16 +15,16 @@ for dir in BUILD BUILDROOT RPMS SOURCES SPECS SRPMS; do
     mkdir -p "$build_dir/$dir"
 done
 cd "$repo_dir"
-if [ -n "${HERMIT_SOURCE_ARCHIVE_DIR:-}" ]; then
-    cp "$HERMIT_SOURCE_ARCHIVE_DIR/hermit-$version.tar.gz" \
-       "$HERMIT_SOURCE_ARCHIVE_DIR/hermit-$version-vendor.tar.gz" "$build_dir/SOURCES/"
+if [ -n "${BARNACLE_SOURCE_ARCHIVE_DIR:-}" ]; then
+    cp "$BARNACLE_SOURCE_ARCHIVE_DIR/barnacle-$version.tar.gz" \
+       "$BARNACLE_SOURCE_ARCHIVE_DIR/barnacle-$version-vendor.tar.gz" "$build_dir/SOURCES/"
 else
     python3 packaging/release/source.py
-    cp "dist/hermit-$version.tar.gz" "dist/hermit-$version-vendor.tar.gz" "$build_dir/SOURCES/"
+    cp "dist/barnacle-$version.tar.gz" "dist/barnacle-$version-vendor.tar.gz" "$build_dir/SOURCES/"
 fi
-cp packaging/rpm/hermit.spec "$build_dir/SPECS/"
+cp packaging/rpm/barnacle.spec "$build_dir/SPECS/"
 
-rpmbuild -bb --define "_topdir $build_dir" "$build_dir/SPECS/hermit.spec"
+rpmbuild -bb --define "_topdir $build_dir" "$build_dir/SPECS/barnacle.spec"
 mkdir -p "$repo_dir/dist"
-find "$build_dir/RPMS" -type f -name 'hermit-*.rpm' -exec cp {} "$repo_dir/dist/" \;
+find "$build_dir/RPMS" -type f -name 'barnacle-*.rpm' -exec cp {} "$repo_dir/dist/" \;
 echo "RPM written to $repo_dir/dist/"

@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/proddata/hermit/internal/gateway"
+	"github.com/proddata/barnacle/internal/gateway"
 )
 
 const pgRowMessageOverhead = 16 << 10 // PostgreSQL allows at most 1,600 columns.
@@ -80,7 +80,7 @@ func encodeLimitedJSON(value any, maxBytes int64) ([]byte, error) {
 	return encoded, nil
 }
 func apiError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]any{"message": err.Error(), "code": "HERMIT_ERROR"})
+	writeJSON(w, status, map[string]any{"message": err.Error(), "code": "BARNACLE_ERROR"})
 }
 
 func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
@@ -117,7 +117,7 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	}
 	if raw == "" {
 		if c.PGAddr == "" {
-			return nil, errors.New("Neon-Connection-String required without HERMIT_PG_ADDR")
+			return nil, errors.New("Neon-Connection-String required without BARNACLE_PG_ADDR")
 		}
 		raw = (&url.URL{Scheme: "postgres", User: url.UserPassword(c.PGUser, c.PGPassword), Host: c.PGAddr, Path: "/" + c.PGDatabase}).String()
 	}
@@ -163,7 +163,7 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	} else if c.PGSSLMode == "require" {
 		pgcfg.TLSConfig = c.PGTLSConfig(host)
 	} else {
-		return nil, errors.New("HERMIT_PG_SSLMODE must be disable or require")
+		return nil, errors.New("BARNACLE_PG_SSLMODE must be disable or require")
 	}
 	if authorization != "" {
 		scheme, token, ok := strings.Cut(authorization, " ")
@@ -515,7 +515,7 @@ func dbConnectError(w http.ResponseWriter, err error, requireOAuth bool) {
 		strings.Contains(connectErr.Error(), `authentication method requirement "oauth" failed:`) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"message": "upstream PostgreSQL does not offer OAuth authentication for this connection",
-			"code":    "HERMIT_UPSTREAM_OAUTH_UNAVAILABLE",
+			"code":    "BARNACLE_UPSTREAM_OAUTH_UNAVAILABLE",
 		})
 		return
 	}
@@ -534,7 +534,7 @@ func dbError(w http.ResponseWriter, err error) {
 	if errors.As(err, &unknownCA) || errors.As(err, &wrongHost) || errors.As(err, &invalidCert) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"message": "PostgreSQL TLS certificate verification failed; check the CA certificate and host name",
-			"code":    "HERMIT_UPSTREAM_TLS_VERIFICATION_FAILED",
+			"code":    "BARNACLE_UPSTREAM_TLS_VERIFICATION_FAILED",
 		})
 		return
 	}

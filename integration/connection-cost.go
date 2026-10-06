@@ -1,5 +1,5 @@
 // Run with: TEST_DATABASE_URL=... go run integration/connection-cost.go -mode=fresh -queries=500
-// This isolates PostgreSQL connection setup cost; it does not implement Hermit's HTTP path.
+// This isolates PostgreSQL connection setup cost; it does not implement Barnacle's HTTP path.
 package main
 
 import (

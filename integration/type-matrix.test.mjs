@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { queryMatrix, typeMatrix } from './type-matrix.mjs';
 
-const endpoint = `${process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080'}/sql`;
+const endpoint = `${process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080'}/sql`;
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL for the type matrix');
 

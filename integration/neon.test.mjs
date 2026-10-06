@@ -5,10 +5,10 @@ import WebSocket from 'ws';
 
 globalThis.WebSocket = WebSocket;
 
-const base = process.env.HERMIT_BASE_URL || 'http://127.0.0.1:8080';
+const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080';
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL for the integration suite');
-const poolerTopology = process.env.HERMIT_TEST_PGBOUNCER === '1';
+const poolerTopology = process.env.BARNACLE_TEST_PGBOUNCER === '1';
 const endpoint = new URL(base);
 
 neonConfig.fetchEndpoint = `${base}/sql`;
@@ -127,7 +127,7 @@ test('Neon fullResults preserves command metadata and custom type parsers', asyn
   assert.equal(array.rowAsArray, true);
   assert.deepEqual(array.rows, [[42]]);
 
-  const table = `hermit_metadata_${process.pid}`;
+  const table = `barnacle_metadata_${process.pid}`;
   const ddl = await sql.query(`create table ${table} (id int)`, [], { fullResults: true });
   try {
     assert.equal(ddl.command, 'CREATE');
@@ -225,14 +225,14 @@ test('Neon HTTP exposes authentication and SQL error details', async () => {
   });
 
   const missingDatabase = new URL(databaseUrl);
-  missingDatabase.pathname = '/hermit_missing_database';
+  missingDatabase.pathname = '/barnacle_missing_database';
   await assert.rejects(neon(missingDatabase.toString()).query('select 1'), (error) => {
     assert.equal(error.code, poolerTopology ? '08P01' : '3D000');
     return true;
   });
 
   const missingRole = new URL(databaseUrl);
-  missingRole.username = 'hermit_missing_role';
+  missingRole.username = 'barnacle_missing_role';
   await assert.rejects(neon(missingRole.toString()).query('select 1'), (error) => {
     assert.equal(error.code, poolerTopology ? '08P01' : '28P01'); // PgBouncer reports its own login failure.
     return true;
@@ -249,7 +249,7 @@ test('Neon HTTP exposes authentication and SQL error details', async () => {
     return true;
   });
 
-  const table = `hermit_constraint_${process.pid}`;
+  const table = `barnacle_constraint_${process.pid}`;
   const sql = neon(databaseUrl);
   await sql.query(`create table ${table} (id int primary key)`);
   try {
@@ -296,7 +296,7 @@ test('HTTP rejects a field above the default row limit', async () => {
     body: JSON.stringify({ query: "select repeat('x', 9 * 1048576) as payload", params: [] }),
   });
   assert.equal(response.status, 413);
-  assert.equal((await response.json()).code, 'HERMIT_ERROR');
+  assert.equal((await response.json()).code, 'BARNACLE_ERROR');
 });
 
 test('HTTP bounds the total buffered batch result', async () => {
@@ -308,7 +308,7 @@ test('HTTP bounds the total buffered batch result', async () => {
     })) }),
   });
   assert.equal(response.status, 413);
-  assert.equal((await response.json()).code, 'HERMIT_ERROR');
+  assert.equal((await response.json()).code, 'BARNACLE_ERROR');
 });
 
 test('HTTP bounds buffered batches with many empty rows', async () => {
@@ -324,7 +324,7 @@ test('HTTP bounds buffered batches with many empty rows', async () => {
 
 test('plain JSON follows Neon type conversion, including a custom enum array', async () => {
   const sql = neon(databaseUrl);
-  const typeName = `hermit_compat_enum_${process.pid}`;
+  const typeName = `barnacle_compat_enum_${process.pid}`;
   await sql.query(`create type ${typeName} as enum ('red', 'blue')`);
   try {
     const response = await fetch(`${base}/sql`, {
@@ -390,9 +390,9 @@ test('plain and raw HTTP output preserve less common PostgreSQL types', async ()
 test('HTTP handles domains, composites, ranges, array bounds, and box delimiters', async () => {
   const sql = neon(databaseUrl);
   const suffix = `${process.pid}`;
-  const domain = `hermit_domain_${suffix}`;
-  const composite = `hermit_composite_${suffix}`;
-  const range = `hermit_range_${suffix}`;
+  const domain = `barnacle_domain_${suffix}`;
+  const composite = `barnacle_composite_${suffix}`;
+  const range = `barnacle_range_${suffix}`;
   await sql.query(`create domain ${domain} as int4`);
   await sql.query(`create type ${composite} as (id int4, label text)`);
   await sql.query(`create type ${range} as range (subtype=int4)`);

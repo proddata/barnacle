@@ -1,6 +1,6 @@
 package sqlhttp
 
-import "github.com/proddata/hermit/internal/gateway"
+import "github.com/proddata/barnacle/internal/gateway"
 
 // Handler serves the SQL-over-HTTP entrance.
 type Handler struct{ *gateway.Config }

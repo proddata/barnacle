@@ -6,15 +6,15 @@ cd "$repo_dir"
 tls_dir=$(mktemp -d)
 mkdir -p "$tls_dir/certs"
 chmod 755 "$tls_dir" "$tls_dir/certs"
-export HERMIT_TLS_DIR="$tls_dir/certs"
-existing_hermit=$(docker compose ps -q hermit)
+export BARNACLE_TLS_DIR="$tls_dir/certs"
+existing_barnacle=$(docker compose ps -q barnacle)
 
 cleanup() {
-    docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml stop hermit_ip >/dev/null 2>&1 || true
-    docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml rm -f hermit_ip >/dev/null 2>&1 || true
+    docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml stop barnacle_ip >/dev/null 2>&1 || true
+    docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml rm -f barnacle_ip >/dev/null 2>&1 || true
     docker compose -f compose.yaml -f integration/tls/compose.yaml stop haproxy >/dev/null 2>&1 || true
     docker compose -f compose.yaml -f integration/tls/compose.yaml rm -f haproxy >/dev/null 2>&1 || true
-    if [ -z "$existing_hermit" ]; then
+    if [ -z "$existing_barnacle" ]; then
         docker compose down >/dev/null 2>&1 || true
     fi
     rm -rf "$tls_dir"
@@ -23,7 +23,7 @@ trap cleanup EXIT HUP INT TERM
 
 openssl genrsa -out "$tls_dir/ca.key" 2048 >/dev/null 2>&1
 openssl req -x509 -new -sha256 -key "$tls_dir/ca.key" -out "$tls_dir/ca.crt" \
-    -days 2 -subj '/CN=Hermit Test CA' \
+    -days 2 -subj '/CN=Barnacle Test CA' \
     -addext 'basicConstraints=critical,CA:TRUE' \
     -addext 'keyUsage=critical,keyCertSign,cRLSign' >/dev/null 2>&1
 openssl req -new -newkey rsa:2048 -nodes -keyout "$tls_dir/server.key" \
@@ -56,14 +56,14 @@ if [ "$ready" != true ]; then
     exit 1
 fi
 
-log_canary="hermit-log-canary-$$"
-log_probe="hermit-log-probe-$$"
+log_canary="barnacle-log-canary-$$"
+log_probe="barnacle-log-probe-$$"
 curl --silent --show-error --fail --cacert "$tls_dir/ca.crt" \
     -H "Authorization: Bearer $log_canary" \
     -H "Neon-Connection-String: postgres://test:$log_canary@localhost/test" \
-    -H "Cookie: hermit_access_token=$log_canary" \
+    -H "Cookie: barnacle_access_token=$log_canary" \
     "https://127.0.0.1:8443/healthz?probe=$log_probe" >/dev/null
-proxy_logs=$(docker compose -f compose.yaml -f integration/tls/compose.yaml logs --no-color haproxy hermit)
+proxy_logs=$(docker compose -f compose.yaml -f integration/tls/compose.yaml logs --no-color haproxy barnacle)
 if ! printf '%s\n' "$proxy_logs" | grep -Fq "$log_probe"; then
     echo 'HAProxy did not log the canary request path' >&2
     exit 1
@@ -73,26 +73,26 @@ if printf '%s\n' "$proxy_logs" | grep -Fq "$log_canary"; then
     exit 1
 fi
 
-HERMIT_BASE_URL=https://127.0.0.1:8443 \
+BARNACLE_BASE_URL=https://127.0.0.1:8443 \
 NODE_EXTRA_CA_CERTS="$tls_dir/ca.crt" \
-TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@postgres:5432/hermit \
+TEST_DATABASE_URL=postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle \
 node integration/pg-tls.mjs
 
 postgres_container=$(docker compose ps -q postgres)
-HERMIT_TEST_PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$postgres_container")
-if [ -z "$HERMIT_TEST_PG_IP" ]; then
+BARNACLE_TEST_PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$postgres_container")
+if [ -z "$BARNACLE_TEST_PG_IP" ]; then
     echo 'could not find the Compose PostgreSQL container IP' >&2
     exit 1
 fi
-export HERMIT_TEST_PG_IP
-docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml up --build -d hermit_ip
-HERMIT_BASE_URL=http://127.0.0.1:8082 \
-TEST_DATABASE_URL="postgres://hermit:hermit_dev_password@$HERMIT_TEST_PG_IP:5432/hermit" \
+export BARNACLE_TEST_PG_IP
+docker compose -f compose.yaml -f integration/tls/pg-ip-compose.yaml up --build -d barnacle_ip
+BARNACLE_BASE_URL=http://127.0.0.1:8082 \
+TEST_DATABASE_URL="postgres://barnacle:barnacle_dev_password@$BARNACLE_TEST_PG_IP:5432/barnacle" \
 node integration/pg-tls.mjs
 
-if [ "${HERMIT_TLS_SMOKE_ONLY:-}" != 1 ]; then
-    HERMIT_BASE_URL=https://127.0.0.1:8443 \
+if [ "${BARNACLE_TLS_SMOKE_ONLY:-}" != 1 ]; then
+    BARNACLE_BASE_URL=https://127.0.0.1:8443 \
     NODE_EXTRA_CA_CERTS="$tls_dir/ca.crt" \
-    TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@postgres:5432/hermit \
+    TEST_DATABASE_URL=postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle \
     npm test --prefix integration
 fi

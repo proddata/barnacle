@@ -2,7 +2,7 @@ import * as monaco from 'monaco-editor/editor/editor.api';
 import 'monaco-editor/languages/definitions/pgsql/register';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import './style.css';
-import { COLUMNS_SQL, TABLES_SQL, closeQuerySession, executeBatch, executeQuery, quoteIdentifier, safeError, safeJSON } from './db.js';
+import { COLUMNS_SQL, TABLES_SQL, closeQuerySession, openQuerySession, executeBatch, executeQuery, quoteIdentifier, safeError, safeJSON } from './db.js';
 import { splitStatements } from './statements.js';
 
 self.MonacoEnvironment = { getWorker() { return new EditorWorker(); } };
@@ -26,8 +26,9 @@ const statusMeta = $('status-meta');
 const connectionBadge = $('connection-badge');
 const fields = Object.fromEntries(['connection-name', 'host', 'database', 'username', 'password', 'token', 'method', 'auth-method'].map((id) => [id, $(id)]));
 
-const PROFILE_KEY = 'hermit-console-connections-v1';
-const defaultProfile = { id: 'local-dev', name: 'Local development', host: 'postgres:5432', database: 'hermit', username: 'hermit', method: 'http-password', authMethod: '' };
+const PROFILE_KEY = 'barnacle-console-connections-v1';
+const LEGACY_PROFILE_KEY = 'hermit-console-connections-v1';
+const defaultProfile = { id: 'local-dev', name: 'Local development', host: 'postgres:5432', database: 'barnacle', username: 'barnacle', method: 'http-password', authMethod: '' };
 const examples = {
   'transaction-delay': {
     name: 'Transaction with delay',
@@ -64,8 +65,14 @@ SELECT 3 AS after_rollback;`,
 };
 function loadProfiles() {
   try {
-    const data = JSON.parse(localStorage.getItem(PROFILE_KEY));
-    if (Array.isArray(data) && data.length) return data.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string');
+    const saved = localStorage.getItem(PROFILE_KEY);
+    const data = JSON.parse(saved ?? localStorage.getItem(LEGACY_PROFILE_KEY));
+    if (Array.isArray(data) && data.length) {
+      return data.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string').map((item) =>
+        saved === null && item.id === 'local-dev' && item.host === 'postgres:5432' && item.database === 'hermit' && item.username === 'hermit'
+          ? { ...item, database: 'barnacle', username: 'barnacle' }
+          : item);
+    }
   } catch { /* Invalid local data falls back to the development profile. */ }
   return [{ ...defaultProfile }];
 }
@@ -75,7 +82,7 @@ let activeConnectionId = profiles[0].id;
 const secrets = new Map();
 const localDevelopment = profiles.find((profile) => profile.id === 'local-dev');
 if (localDevelopment?.host === defaultProfile.host && localDevelopment.database === defaultProfile.database && localDevelopment.username === defaultProfile.username) {
-  secrets.set('local-dev', { password: 'hermit_dev_password', token: '' });
+  secrets.set('local-dev', { password: 'barnacle_dev_password', token: '' });
 }
 
 let tabs = [];
@@ -90,7 +97,7 @@ const openSchemas = new Set(['public']);
 const openTables = new Set();
 let busy = false;
 
-monaco.editor.defineTheme('hermit', {
+monaco.editor.defineTheme('barnacle', {
   base: 'vs-dark', inherit: true,
   rules: [
     { token: 'keyword', foreground: '77cfc2', fontStyle: 'bold' },
@@ -106,13 +113,18 @@ monaco.editor.defineTheme('hermit', {
   },
 });
 const editor = monaco.editor.create(editorNode, {
-  theme: 'hermit', language: 'pgsql', automaticLayout: true,
+  theme: 'barnacle', language: 'pgsql', automaticLayout: false,
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
   fontSize: 13, lineHeight: 21, minimap: { enabled: false },
   scrollBeyondLastLine: false, smoothScrolling: true,
   roundedSelection: false, padding: { top: 17, bottom: 15 },
   wordWrap: 'on', tabSize: 2,
 });
+const editorSize = new ResizeObserver(([entry]) => {
+  const { width, height } = entry.contentRect;
+  if (width > 0 && height > 0) editor.layout({ width, height });
+});
+editorSize.observe(editorNode);
 editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runCurrent());
 editor.onDidChangeCursorSelection(updateRunLabel);
 
@@ -171,12 +183,13 @@ function showConnection(id) {
   if (tab) activateTab(tab.id);
   else createTab('Query 1', 'select now() as server_time, current_user as db_user;');
   setConnectionState('', `${profile.name} selected`);
+  renderConnectionInfo();
   setStatus(`Switched to ${profile.name}`, `${profile.host} / ${profile.database}`);
 }
 
 function setStatus(message, meta = '') {
   statusMessage.textContent = message;
-  statusMeta.textContent = meta || 'PostgreSQL via Hermit';
+  statusMeta.textContent = meta || 'PostgreSQL via Barnacle';
 }
 
 function setConnectionState(state, text) {
@@ -195,12 +208,13 @@ function updateMethodFields() {
 function setRunBusy(value) {
   busy = value;
   runButton.disabled = value;
+  renderConnectionInfo();
 }
 
 function createTab(name = `Query ${nextTabId + 1}`, sql = '') {
   const id = ++nextTabId;
-  const model = monaco.editor.createModel(sql, 'pgsql', monaco.Uri.parse(`inmemory://hermit/query-${id}.pgsql`));
-  tabs.push({ id, name, model, connectionId: activeConnectionId, session: { onChange: renderConnectionInfo }, results: [], selectedResultIndex: 0, resultView: 'data' });
+  const model = monaco.editor.createModel(sql, 'pgsql', monaco.Uri.parse(`inmemory://barnacle/query-${id}.pgsql`));
+  tabs.push({ id, name, model, connectionId: activeConnectionId, session: { status: 'disconnected', onChange: renderConnectionInfo }, results: [], selectedResultIndex: 0, resultView: 'data' });
   activateTab(id);
   return id;
 }
@@ -250,16 +264,22 @@ function activeTab() { return tabs.find((tab) => tab.id === activeTabId); }
 function renderConnectionInfo() {
   startupDetails.replaceChildren();
   const session = activeTab()?.session;
+  const websocket = fields.method.value === 'ws-password';
+  const state = websocket ? session?.status ?? 'disconnected' : 'disconnected';
+  startupState.textContent = websocket ? ({ connecting: 'Connecting…', connected: 'Connected', failed: 'Failed', disconnected: 'Disconnected' })[state] : 'HTTP transport';
+  startupState.className = `session-state ${state}`;
+  $('session-controls').hidden = !websocket;
+  $('connect-session').disabled = busy || state === 'connecting' || state === 'connected';
+  $('disconnect-session').disabled = busy || (state !== 'connected' && state !== 'failed');
+  if (websocket) setConnectionState(state === 'connected' ? 'connected' : state === 'failed' ? 'failed' : '', `${startupState.textContent} · ${fields.host.value} / ${fields.database.value}`);
   if (fields.method.value !== 'ws-password' || !session?.client || !session.connection) {
-    startupState.textContent = 'No session';
     const empty = document.createElement('p'); empty.className = 'startup-empty';
     empty.textContent = fields.method.value === 'ws-password'
-      ? 'Run a query to open this tab’s WebSocket session.'
+      ? session?.error || (state === 'connecting' ? 'Opening this tab’s WebSocket session…' : 'Connect or run a query to open this tab’s WebSocket session.')
       : 'Select WebSocket transport to see startup parameters.';
     startupDetails.append(empty);
     return;
   }
-  startupState.textContent = 'Connected';
   const table = document.createElement('table'); table.className = 'startup-table';
   const head = document.createElement('thead');
   const header = document.createElement('tr');
@@ -449,7 +469,7 @@ function exportCSV() {
   for (const row of lastResult.rows) lines.push(columns.map((name) => csvCell(row[name])).join(','));
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const link = document.createElement('a'); link.href = url; link.download = 'hermit-results.csv';
+  const link = document.createElement('a'); link.href = url; link.download = 'barnacle-results.csv';
   document.body.append(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -480,13 +500,13 @@ async function runCurrent() {
     try {
       const result = await executeQuery(current, statement.sql, [], reportTrace, 'query', tab.session);
       tab.results.push({ ...result, sql: statement.sql, durationMs: Math.round(performance.now() - started) });
-      setConnectionState('connected', `${current.host} / ${current.database}`);
+      if (current.method !== 'ws-password') setConnectionState('connected', `${current.host} / ${current.database}`);
     } catch (error) {
       const message = safeError(error, current);
       tab.results.push({ sql: statement.sql, error: message, durationMs: Math.round(performance.now() - started) });
       tab.selectedResultIndex = index;
       setStatus(`Statement ${index + 1} failed`, message);
-      setConnectionState('failed', `${current.host} / ${current.database}`);
+      if (current.method !== 'ws-password') setConnectionState('failed', `${current.host} / ${current.database}`);
       break;
     }
     tab.selectedResultIndex = index;
@@ -631,7 +651,7 @@ monaco.languages.registerCompletionItemProvider('pgsql', {
 
 function setupResize(handleId, side) {
   const handle = $(handleId);
-  const key = `hermit-console-${side}-size`;
+  const key = `barnacle-console-${side}-size`;
   const saved = Number(localStorage.getItem(key));
   if (saved > 0) workbench.style.setProperty(`--${side === 'results' ? 'results-height' : `${side === 'left' ? 'explorer' : 'debug'}-width`}`, `${saved}px`);
   function apply(value) {
@@ -664,10 +684,47 @@ function togglePanel(side) {
     const other = side === 'left' ? 'mobile-debug' : 'mobile-explorer';
     workbench.classList.remove(other); workbench.classList.toggle(target);
   } else workbench.classList.toggle(side === 'left' ? 'explorer-collapsed' : 'debug-collapsed');
-  requestAnimationFrame(() => editor.layout());
+  $('toggle-explorer').ariaExpanded = String(!workbench.classList.contains('explorer-collapsed'));
+  $('toggle-debug').ariaExpanded = String(!workbench.classList.contains('debug-collapsed'));
+}
+
+async function connectSession() {
+  if (busy || fields.method.value !== 'ws-password') return;
+  const tab = activeTab();
+  if (!tab) return;
+  const current = settings();
+  setRunBusy(true);
+  try {
+    await openQuerySession(current, tab.session);
+    setStatus('WebSocket connected', `${current.host} / ${current.database}`);
+  } catch (error) {
+    const message = safeError(error, current);
+    tab.session.status = 'failed';
+    tab.session.error = message;
+    renderConnectionInfo();
+    setStatus('WebSocket connection failed', message);
+  } finally {
+    setRunBusy(false);
+  }
+}
+
+async function disconnectSession() {
+  if (busy || fields.method.value !== 'ws-password') return;
+  const tab = activeTab();
+  if (!tab) return;
+  const current = settings();
+  setRunBusy(true);
+  try {
+    await closeQuerySession(tab.session);
+    setStatus('WebSocket disconnected', `${current.host} / ${current.database}`);
+  } finally {
+    setRunBusy(false);
+  }
 }
 
 $('run-query').addEventListener('click', () => runCurrent());
+$('connect-session').addEventListener('click', () => connectSession());
+$('disconnect-session').addEventListener('click', disconnectSession);
 $('refresh-schema').addEventListener('click', refreshSchema);
 $('tree-filter').addEventListener('input', renderTree);
 $('new-tab').addEventListener('click', () => createTab());
@@ -700,8 +757,8 @@ function connectionChanged(event) {
     for (const tab of tabs.filter((item) => item.connectionId === activeConnectionId)) void closeQuerySession(tab.session);
   }
   if (activeConnectionId === 'local-dev' &&
-      (fields.host.value !== 'postgres:5432' || fields.database.value !== 'hermit' || fields.username.value !== 'hermit') &&
-      fields.password.value === 'hermit_dev_password') fields.password.value = '';
+      (fields.host.value !== 'postgres:5432' || fields.database.value !== 'barnacle' || fields.username.value !== 'barnacle') &&
+      fields.password.value === 'barnacle_dev_password') fields.password.value = '';
   saveProfileFromFields(); renderConnectionSelect();
   setConnectionState('', 'Connection changed');
   renderConnectionInfo();

@@ -4,7 +4,7 @@ set -eu
 
 cat > /tmp/pgbouncer.ini <<EOF
 [databases]
-hermit = host=postgres port=5432 dbname=hermit
+barnacle = host=postgres port=5432 dbname=barnacle
 
 [pgbouncer]
 listen_addr = 0.0.0.0
@@ -31,6 +31,6 @@ server_tls_sslmode = verify-full
 server_tls_ca_file = /pgcerts/ca.crt
 EOF
 fi
-printf '"hermit" "hermit_dev_password"\n' > /tmp/userlist.txt
+printf '"barnacle" "barnacle_dev_password"\n' > /tmp/userlist.txt
 chown pgbouncer:pgbouncer /tmp/pgbouncer.ini /tmp/userlist.txt
 exec su-exec pgbouncer pgbouncer /tmp/pgbouncer.ini

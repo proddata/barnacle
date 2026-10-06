@@ -1,14 +1,14 @@
 services:
-  hermit_ip:
+  barnacle_ip:
     build: .
     environment:
-      HERMIT_LISTEN: ':8080'
-      HERMIT_PG_ADDR: '${HERMIT_TEST_PG_IP:-127.0.0.1}:5432'
-      HERMIT_PG_TLS_SERVER_NAME: postgres
-      HERMIT_PG_SSLMODE: require
-      HERMIT_PG_CA_FILE: /pgcerts/ca.crt
-      HERMIT_PG_USER: hermit
-      HERMIT_PG_DATABASE: hermit
+      BARNACLE_LISTEN: ':8080'
+      BARNACLE_PG_ADDR: '${BARNACLE_TEST_PG_IP:-127.0.0.1}:5432'
+      BARNACLE_PG_TLS_SERVER_NAME: postgres
+      BARNACLE_PG_SSLMODE: require
+      BARNACLE_PG_CA_FILE: /pgcerts/ca.crt
+      BARNACLE_PG_USER: barnacle
+      BARNACLE_PG_DATABASE: barnacle
     ports:
       - '127.0.0.1:8082:8080'
     volumes:

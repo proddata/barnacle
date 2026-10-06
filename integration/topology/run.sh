@@ -13,16 +13,16 @@ compose() {
     docker compose -f compose.yaml -f integration/topology/compose.yaml "$@"
 }
 cleanup() {
-    compose stop hermit_topology haproxy_leader pgbouncer_tls >/dev/null 2>&1 || true
-    compose rm -f hermit_topology haproxy_leader pgbouncer_tls >/dev/null 2>&1 || true
+    compose stop barnacle_topology haproxy_leader pgbouncer_tls >/dev/null 2>&1 || true
+    compose rm -f barnacle_topology haproxy_leader pgbouncer_tls >/dev/null 2>&1 || true
 }
 trap cleanup EXIT HUP INT TERM
 
-compose up -d --build hermit_topology
+compose up -d --build barnacle_topology
 ready=false
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     if curl --silent --fail --max-time 2 \
-        -H 'Neon-Connection-String: postgres://hermit:hermit_dev_password@postgres:5432/hermit' \
+        -H 'Neon-Connection-String: postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle' \
         -H 'Content-Type: application/json' \
         --data '{"query":"select 1"}' \
         http://127.0.0.1:18083/sql >/dev/null; then
@@ -32,12 +32,12 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     sleep 1
 done
 if [ "$ready" != true ]; then
-    compose logs hermit_topology haproxy_leader pgbouncer_tls
+    compose logs barnacle_topology haproxy_leader pgbouncer_tls
     echo "private upstream $1 did not pass a TLS-authenticated SQL query" >&2
     exit 1
 fi
 
-HERMIT_BASE_URL=http://127.0.0.1:18083 \
-TEST_DATABASE_URL=postgres://hermit:hermit_dev_password@postgres:5432/hermit \
-HERMIT_TEST_PGBOUNCER="$T11_POOLER" \
+BARNACLE_BASE_URL=http://127.0.0.1:18083 \
+TEST_DATABASE_URL=postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle \
+BARNACLE_TEST_PGBOUNCER="$T11_POOLER" \
   npm test --prefix integration

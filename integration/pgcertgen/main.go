@@ -25,7 +25,7 @@ func main() {
 	check(err)
 	now := time.Now()
 	ca := &x509.Certificate{
-		SerialNumber: serial(), Subject: pkix.Name{CommonName: "Hermit disposable PostgreSQL CA"},
+		SerialNumber: serial(), Subject: pkix.Name{CommonName: "Barnacle disposable PostgreSQL CA"},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(365 * 24 * time.Hour),
 		KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true,
 	}

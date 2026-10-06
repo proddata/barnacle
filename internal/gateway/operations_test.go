@@ -72,12 +72,12 @@ func TestMetricsCountHTTPStatusAndWebSockets(t *testing.T) {
 	response := httptest.NewRecorder()
 	m.Serve(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	for _, line := range []string{
-		"hermit_websocket_active 2", "hermit_sql_requests_total 2",
-		"hermit_sql_errors_total 1", "hermit_sql_duration_seconds_bucket{le=\"+Inf\"} 2",
-		"hermit_sql_duration_seconds_count 2",
-		"hermit_limit_rejections_total{limit=\"http_queries\"} 1",
-		"hermit_limit_rejections_total{limit=\"upstream_connections\"} 1",
-		"hermit_upstream_connection_failures_total 1",
+		"barnacle_websocket_active 2", "barnacle_sql_requests_total 2",
+		"barnacle_sql_errors_total 1", "barnacle_sql_duration_seconds_bucket{le=\"+Inf\"} 2",
+		"barnacle_sql_duration_seconds_count 2",
+		"barnacle_limit_rejections_total{limit=\"http_queries\"} 1",
+		"barnacle_limit_rejections_total{limit=\"upstream_connections\"} 1",
+		"barnacle_upstream_connection_failures_total 1",
 	} {
 		if !strings.Contains(response.Body.String(), line+"\n") {
 			t.Fatalf("metrics missing %q:\n%s", line, response.Body.String())

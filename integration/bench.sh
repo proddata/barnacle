@@ -6,7 +6,7 @@ seconds=${BENCH_SECONDS:-10}
 cd "$repo_dir"
 
 run() {
-    docker compose restart hermit >/dev/null
+    docker compose restart barnacle >/dev/null
     ready=false
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
         if curl --silent --fail http://127.0.0.1:8080/healthz >/dev/null; then
@@ -16,7 +16,7 @@ run() {
         sleep 1
     done
     if [ "$ready" != true ]; then
-        echo 'Hermit did not become ready for the benchmark' >&2
+        echo 'Barnacle did not become ready for the benchmark' >&2
         exit 1
     fi
     node integration/bench.mjs "$@" --seconds="$seconds"
