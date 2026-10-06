@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -10,6 +13,8 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -196,6 +201,12 @@ func main() {
 		IdleTimeout:       httpIdleTimeout,
 		MaxHeaderBytes:    32 << 10,
 	}
+	var certificateReloader *publicCertificateReloader
+	server.TLSConfig, certificateReloader, err = publicTLSConfig(os.Getenv("BARNACLE_TLS_CERT_FILE"), os.Getenv("BARNACLE_TLS_KEY_FILE"))
+	if err != nil {
+		slog.Error("invalid public TLS configuration", "error", err)
+		os.Exit(1)
+	}
 	mainListener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		slog.Error("failed to listen", "address", cfg.Listen, "error", err)
@@ -223,6 +234,9 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if certificateReloader != nil {
+		go certificateReloader.run(ctx, time.Minute)
+	}
 	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
@@ -245,8 +259,12 @@ func main() {
 		close(shutdownDone)
 	}()
 	serveResults := make(chan error, 2)
-	go func() { serveResults <- server.Serve(mainListener) }()
-	slog.Info("barnacle listening", "address", mainListener.Addr().String(), "postgres", cfg.PGAddr)
+	if server.TLSConfig != nil {
+		go func() { serveResults <- server.ServeTLS(mainListener, "", "") }()
+	} else {
+		go func() { serveResults <- server.Serve(mainListener) }()
+	}
+	slog.Info("barnacle listening", "address", mainListener.Addr().String(), "postgres", cfg.PGAddr, "tls", server.TLSConfig != nil)
 	if metricsServer != nil {
 		go func() { serveResults <- metricsServer.Serve(metricsListener) }()
 		slog.Info("metrics listening", "address", metricsListener.Addr().String())
@@ -259,6 +277,106 @@ func main() {
 		slog.Error("server stopped", "error", serveErr)
 		os.Exit(1)
 	}
+}
+
+func publicTLSConfig(certFile, keyFile string) (*tls.Config, *publicCertificateReloader, error) {
+	if certFile == "" && keyFile == "" {
+		return nil, nil, nil
+	}
+	if certFile == "" || keyFile == "" {
+		return nil, nil, errors.New("BARNACLE_TLS_CERT_FILE and BARNACLE_TLS_KEY_FILE must both be set")
+	}
+	certificate, certHash, keyHash, err := loadPublicKeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load public TLS certificate and key: %w", err)
+	}
+	reloader := &publicCertificateReloader{
+		certFile: certFile, keyFile: keyFile,
+		certHash: certHash, keyHash: keyHash,
+	}
+	reloader.certificate.Store(certificate)
+	return &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: reloader.getCertificate}, reloader, nil
+}
+
+type publicCertificateReloader struct {
+	mu          sync.Mutex
+	certFile    string
+	keyFile     string
+	certificate atomic.Pointer[tls.Certificate]
+	certHash    [sha256.Size]byte
+	keyHash     [sha256.Size]byte
+	lastError   string
+}
+
+func loadPublicKeyPair(certFile, keyFile string) (*tls.Certificate, [sha256.Size]byte, [sha256.Size]byte, error) {
+	certPEM, keyPEM, err := readPublicKeyPairFiles(certFile, keyFile)
+	if err != nil {
+		return nil, [sha256.Size]byte{}, [sha256.Size]byte{}, err
+	}
+	certHash, keyHash := sha256.Sum256(certPEM), sha256.Sum256(keyPEM)
+	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, certHash, keyHash, err
+	}
+	return &certificate, certHash, keyHash, nil
+}
+
+func readPublicKeyPairFiles(certFile, keyFile string) ([]byte, []byte, error) {
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read certificate: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read private key: %w", err)
+	}
+	return certPEM, keyPEM, nil
+}
+
+func (r *publicCertificateReloader) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return r.certificate.Load(), nil
+}
+
+func (r *publicCertificateReloader) run(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.reload()
+		}
+	}
+}
+
+func (r *publicCertificateReloader) reload() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	certPEM, keyPEM, err := readPublicKeyPairFiles(r.certFile, r.keyFile)
+	var certHash, keyHash [sha256.Size]byte
+	if err == nil {
+		certHash, keyHash = sha256.Sum256(certPEM), sha256.Sum256(keyPEM)
+		if certHash == r.certHash && keyHash == r.keyHash {
+			r.lastError = ""
+			return
+		}
+	}
+	var certificate tls.Certificate
+	if err == nil {
+		certificate, err = tls.X509KeyPair(certPEM, keyPEM)
+	}
+	if err != nil {
+		if message := err.Error(); message != r.lastError {
+			slog.Error("failed to reload public TLS certificate and key; keeping previous pair", "error", err)
+			r.lastError = message
+		}
+		return
+	}
+	r.lastError = ""
+	r.certificate.Store(&certificate)
+	r.certHash, r.keyHash = certHash, keyHash
+	slog.Info("reloaded public TLS certificate and key")
 }
 
 func positiveIntEnv(key string, fallback int) (int, error) {
