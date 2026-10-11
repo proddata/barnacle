@@ -186,12 +186,13 @@ func main() {
 		slog.Error("BARNACLE_METRICS must be true or false")
 		os.Exit(1)
 	}
-	metricsEnabled := strings.EqualFold(metricsSetting, "true")
+	metricsEnabled := metricsSetting == "" || strings.EqualFold(metricsSetting, "true")
 	metricsListen := os.Getenv("BARNACLE_METRICS_LISTEN")
-	if metricsListen == "" {
-		metricsListen = "127.0.0.1:9090"
+	if metricsEnabled && metricsListen == "" {
+		mux.HandleFunc("GET /metrics", cfg.Metrics.Serve)
+	} else {
+		mux.HandleFunc("GET /metrics", http.NotFound)
 	}
-	mux.HandleFunc("GET /metrics", http.NotFound)
 	mux.HandleFunc("GET /v2", wsHandler.Serve)
 	server := &http.Server{
 		Addr: cfg.Listen, Handler: mux,
@@ -214,7 +215,7 @@ func main() {
 	}
 	var metricsServer *http.Server
 	var metricsListener net.Listener
-	if metricsEnabled {
+	if metricsEnabled && metricsListen != "" {
 		metricsListener, err = net.Listen("tcp", metricsListen)
 		if err != nil {
 			mainListener.Close()

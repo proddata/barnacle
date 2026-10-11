@@ -126,9 +126,9 @@ Nearby services may instead use loopback addresses such as `127.0.0.1:5432`. Wit
 | `POST /sql` | One query or a transactional batch over HTTP |
 | `GET /v2` | PostgreSQL wire session over WebSocket |
 | `GET /healthz`, `GET /readyz` | Liveness and optional PostgreSQL transport readiness |
-| `GET /metrics` | Optional Prometheus metrics (`BARNACLE_METRICS=true`) |
+| `GET /metrics` | Prometheus metrics on the main listener by default |
 
-See the [API and protocol reference](docs/api.md) for request and response details, limits, and cancellation. An OpenTelemetry Collector can scrape `/metrics`; Barnacle does not emit OTLP or traces. Metrics are off by default in the binary. When enabled, they use a separate `127.0.0.1:9090` listener by default; set `BARNACLE_METRICS_LISTEN` for another private address. Local Compose enables metrics on an unpublished container port for its optional console. The supplied HAProxy example blocks `/metrics` on its public listener.
+See the [API and protocol reference](docs/api.md) for request and response details, limits, and cancellation. An OpenTelemetry Collector can scrape `/metrics`; Barnacle does not emit OTLP or traces. Metrics are enabled by default on Barnacle's main listener. Set `BARNACLE_METRICS=false` to disable them, or `BARNACLE_METRICS_LISTEN=127.0.0.1:9090` to move them to a separate local listener. The supplied HAProxy example blocks `/metrics` on its public listener.
 
 ## Build and contribute
 

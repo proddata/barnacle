@@ -23,7 +23,7 @@ Barnacle normally listens on plain HTTP behind an HTTPS/WSS ingress. Send creden
 | `GET /v2` | WebSocket upgrade; optional `address` query parameter | `101` upgrade, then binary PostgreSQL wire messages |
 | `GET /healthz` | None | `200`, `ok\n` |
 | `GET /readyz` | None | `200`, `ok\n`, or `503` if the configured upstream probe fails |
-| `GET /metrics` | None; requires `BARNACLE_METRICS=true` | `200` Prometheus text on the configured metrics listener; otherwise `404` |
+| `GET /metrics` | None; enabled by default | `200` Prometheus text on the main or separate metrics listener; `404` when disabled |
 
 ## Native Barnacle interface
 
@@ -266,7 +266,7 @@ The published Neon `Client` and `Pool` retain PostgreSQL session state across We
 
 `GET /healthz` always returns `200 OK` with `ok\n` while Barnacle's HTTP server is running. `GET /readyz` returns the same response by default. If `BARNACLE_READY_PG_ADDR` is set, it first probes that PostgreSQL address at the network/TLS level; failure or a concurrent probe returns `503` plain text. The probe does not authenticate or execute SQL.
 
-`GET /metrics` is available only with `BARNACLE_METRICS=true`, on a separate listener that defaults to `127.0.0.1:9090`. Set `BARNACLE_METRICS_LISTEN` to change its address. The main listener always returns `404` for `/metrics`, and the metrics listener returns `404` for other routes. Its `200` response has `Content-Type: text/plain; version=0.0.4; charset=utf-8` and Prometheus metrics for active WebSockets, accepted WebSocket upgrades since startup, active and completed HTTP SQL requests, HTTP SQL errors and duration, stream interruptions, connection-limit rejections, and upstream failures. The WebSocket total includes sessions that later disconnect or fail PostgreSQL authentication; it does not count rejected upgrades. Stream interruptions have one of four fixed kinds (`result_limit`, `canceled`, `timeout`, `query_or_transport`) and may occur after a `200` response starts, so they are counted separately from HTTP errors. Restrict access to the metrics listener; this endpoint has no authentication.
+`GET /metrics` is enabled by default on the main listener. `BARNACLE_METRICS=false` disables it. When `BARNACLE_METRICS_LISTEN` is set to a `host:port`, `/metrics` moves to that separate listener: the main listener returns `404` for `/metrics`, and the metrics listener returns `404` for other routes. Its `200` response has `Content-Type: text/plain; version=0.0.4; charset=utf-8` and Prometheus metrics for active WebSockets, accepted WebSocket upgrades since startup, active and completed HTTP SQL requests, HTTP SQL errors and duration, stream interruptions, connection-limit rejections, and upstream failures. The WebSocket total includes sessions that later disconnect or fail PostgreSQL authentication; it does not count rejected upgrades. Stream interruptions have one of four fixed kinds (`result_limit`, `canceled`, `timeout`, `query_or_transport`) and may occur after a `200` response starts, so they are counted separately from HTTP errors. Restrict access to this endpoint; it has no authentication.
 
 ## Size and timing limits
 

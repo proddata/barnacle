@@ -17,6 +17,23 @@ The HTTP connection number is an **in-flight cap**. Fast HTTP queries typically 
 
 These samples do not measure PostgreSQL backend memory, CPU saturation, maximum capacity, or short memory spikes between samples. PostgreSQL query shape, result size, authentication method, concurrent clients, HAProxy, and Fedora host memory will affect the numbers. For an installed Fedora service, `--memory-source=systemd` samples `MemoryCurrent` from `barnacle.service`; see the [benchmark instructions](docs/development.md#measure-memory-under-load).
 
+## 2026-10-06 local rerun
+
+After the current server changes, the eight preset profiles were rerun for ten seconds each against a freshly built Compose stack on Docker Desktop for macOS. The runner used the Compose PostgreSQL address `postgres:5432`; its former `localhost:5432` default caused every request to fail because `localhost` referred to the Barnacle container. Barnacle was restarted before each profile. Every preset request completed with no errors or skips. The memory columns distinguish the largest sampled usage from the cgroup's recorded peak.
+
+| Transport | Open WS / HTTP in-flight cap | Target → achieved QPS | Query | p95 latency | Sampled / cgroup peak MiB |
+| --- | ---: | ---: | --- | ---: | ---: |
+| HTTP | 1 | 10 → 10.0 | `select 1` | 19.3 ms | 12.4 / 17.6 |
+| HTTP | 8 | 50 → 49.9 | `select 1` | 8.4 ms | 13.2 / 20.2 |
+| HTTP | 8 | 100 → 99.9 | `select 1` | 6.4 ms | 13.6 / 20.6 |
+| HTTP | 8 | 30 → 29.4 | `pg_sleep(0.2)` | 214.3 ms | 12.8 / 17.9 |
+| HTTP | 8 | 50 → 49.9 | 8 KiB text result | 9.4 ms | 15.1 / 23.6 |
+| WebSocket | 1 | 10 → 10.0 | `select 1` | 5.5 ms | 9.2 / 16.8 |
+| WebSocket | 8 | 50 → 50.0 | `select 1` | 4.3 ms | 10.0 / 19.2 |
+| WebSocket | 32 | 100 → 99.9 | `select 1` | 3.6 ms | 12.3 / 19.1 |
+
+Two additional ten-second profiles repeated the earlier 500 QPS comparison with eight slots or sessions. HTTP completed 4,977 requests, skipped 23 when all eight slots were occupied, and had 7.2 ms p95 latency and a 16.9 / 21.4 MiB sampled / cgroup peak. WebSocket completed all 5,000 requests with 3.2 ms p95 latency and a 12.3 / 21.0 MiB peak. The earlier run recorded HTTP 4,981 completed, 19 skipped, and 6.7 ms p95; WebSocket completed 5,000 at 3.5 ms p95. These small differences are within the noise expected from separate Docker Desktop runs, not evidence of a material throughput change.
+
 ## 100 MiB result comparison
 
 These measurements were taken before the default HTTP size limits were added. The same query returned exactly 100 MiB of ASCII text in either 100 rows of 1 MiB or one row of 100 MiB. Each run followed a Barnacle container restart. `memory.peak` from Barnacle's cgroup records the peak even when a 200 ms sample misses it. HTTP used the published Neon driver and its normal gzip-capable `fetch()` path. The text repeats an MD5 digest, so it compresses strongly; these timings are not a comparison of uncompressed network throughput.

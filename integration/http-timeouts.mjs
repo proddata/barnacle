@@ -135,11 +135,11 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL');
 const slowReservation = createServer();
 const slowPort = await listen(slowReservation);
-await close(slowReservation);
-const slowBase = `http://127.0.0.1:${slowPort}`;
 const metricsReservation = createServer();
 const metricsPort = await listen(metricsReservation);
+await close(slowReservation);
 await close(metricsReservation);
+const slowBase = `http://127.0.0.1:${slowPort}`;
 const metricsBase = `http://127.0.0.1:${metricsPort}`;
 const slowChild = spawn(binary, [], {
   env: {
