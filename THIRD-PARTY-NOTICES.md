@@ -16,7 +16,7 @@ image and RPM.
 | --- | --- | --- | --- |
 | Go standard library | Go 1.26.9 | BSD-3-Clause | `GO-STANDARD-LIBRARY` |
 | `github.com/jackc/pgx/v5` | 5.11.0 | MIT | `PGX` |
-| `github.com/coder/websocket` | 1.8.15 | ISC | `COREDER-WEBSOCKET` |
+| `github.com/coder/websocket` | 1.8.15 | ISC | `CODER-WEBSOCKET` |
 | `github.com/klauspost/compress` | 1.20.1 | BSD-3-Clause, Apache-2.0 (`gzhttp`), MIT (`xxhash`) | `KLAUSPOST-COMPRESS` |
 | `github.com/jackc/pgpassfile` | 1.0.0 | MIT | `PGPASSFILE` |
 | `github.com/jackc/pgservicefile` | 2024-06-06 commit `5a60cdf6a761` | MIT | `PGSERVICEFILE` |
