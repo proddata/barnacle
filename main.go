@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,73 +36,27 @@ func env(key, fallback string) string {
 }
 
 func main() {
-	timeout, err := time.ParseDuration(env("BARNACLE_QUERY_TIMEOUT", "10m"))
-	if err != nil || timeout <= 0 {
-		slog.Error("invalid BARNACLE_QUERY_TIMEOUT")
-		os.Exit(1)
-	}
-	statementTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_STATEMENT_TIMEOUT", "60s"))
-	if err != nil || statementTimeout < time.Millisecond {
-		slog.Error("invalid BARNACLE_HTTP_STATEMENT_TIMEOUT")
-		os.Exit(1)
-	}
-	httpReadTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_READ_TIMEOUT", "15s"))
-	if err != nil || httpReadTimeout <= 0 {
-		slog.Error("invalid BARNACLE_HTTP_READ_TIMEOUT")
-		os.Exit(1)
-	}
+	timeout := durationEnv("BARNACLE_QUERY_TIMEOUT", "10m", 1)
+	statementTimeout := durationEnv("BARNACLE_HTTP_STATEMENT_TIMEOUT", "60s", time.Millisecond)
+	httpReadTimeout := durationEnv("BARNACLE_HTTP_READ_TIMEOUT", "15s", 1)
 	// Give the SQL handler's request deadline time to finish before the HTTP
 	// server cuts off its response write.
 	httpWriteTimeout := timeout + time.Second
 	if httpWriteTimeout <= timeout {
-		slog.Error("BARNACLE_QUERY_TIMEOUT is too large")
-		os.Exit(1)
+		exitf("BARNACLE_QUERY_TIMEOUT is too large")
 	}
-	httpIdleTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_IDLE_TIMEOUT", "60s"))
-	if err != nil || httpIdleTimeout <= 0 {
-		slog.Error("invalid BARNACLE_HTTP_IDLE_TIMEOUT")
-		os.Exit(1)
+	httpIdleTimeout := durationEnv("BARNACLE_HTTP_IDLE_TIMEOUT", "60s", 1)
+	wsIdleTimeout := durationEnv("BARNACLE_WS_IDLE_TIMEOUT", "30m", 1)
+	wsWriteTimeout := durationEnv("BARNACLE_WS_WRITE_TIMEOUT", "30s", 1)
+	maxConnections := positiveIntEnv("BARNACLE_MAX_CONNECTIONS", 32)
+	maxHTTPQueries := positiveIntEnv("BARNACLE_MAX_HTTP_QUERIES", 8)
+	if maxHTTPQueries > maxConnections {
+		exitf("invalid BARNACLE_MAX_HTTP_QUERIES")
 	}
-	wsIdleTimeout, err := time.ParseDuration(env("BARNACLE_WS_IDLE_TIMEOUT", "30m"))
-	if err != nil || wsIdleTimeout <= 0 {
-		slog.Error("invalid BARNACLE_WS_IDLE_TIMEOUT")
-		os.Exit(1)
-	}
-	wsWriteTimeout, err := time.ParseDuration(env("BARNACLE_WS_WRITE_TIMEOUT", "30s"))
-	if err != nil || wsWriteTimeout <= 0 {
-		slog.Error("invalid BARNACLE_WS_WRITE_TIMEOUT")
-		os.Exit(1)
-	}
-	maxConnections, err := strconv.Atoi(env("BARNACLE_MAX_CONNECTIONS", "32"))
-	if err != nil || maxConnections <= 0 {
-		slog.Error("invalid BARNACLE_MAX_CONNECTIONS")
-		os.Exit(1)
-	}
-	maxHTTPQueries, err := positiveIntEnv("BARNACLE_MAX_HTTP_QUERIES", 8)
-	if err != nil || maxHTTPQueries > maxConnections {
-		slog.Error("invalid BARNACLE_MAX_HTTP_QUERIES")
-		os.Exit(1)
-	}
-	maxHTTPRequestMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_REQUEST_MIB", 10)
-	if err != nil {
-		slog.Error("invalid BARNACLE_HTTP_MAX_REQUEST_MIB")
-		os.Exit(1)
-	}
-	maxHTTPRowMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_ROW_MIB", 8)
-	if err != nil {
-		slog.Error("invalid BARNACLE_HTTP_MAX_ROW_MIB")
-		os.Exit(1)
-	}
-	maxHTTPBufferedMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_BUFFERED_MIB", 10)
-	if err != nil {
-		slog.Error("invalid BARNACLE_HTTP_MAX_BUFFERED_MIB")
-		os.Exit(1)
-	}
-	maxHTTPResponseMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_RESPONSE_MIB", 2048)
-	if err != nil {
-		slog.Error("invalid BARNACLE_HTTP_MAX_RESPONSE_MIB")
-		os.Exit(1)
-	}
+	maxHTTPRequestMiB := mibEnv("BARNACLE_HTTP_MAX_REQUEST_MIB", 10)
+	maxHTTPRowMiB := mibEnv("BARNACLE_HTTP_MAX_ROW_MIB", 8)
+	maxHTTPBufferedMiB := mibEnv("BARNACLE_HTTP_MAX_BUFFERED_MIB", 10)
+	maxHTTPResponseMiB := mibEnv("BARNACLE_HTTP_MAX_RESPONSE_MIB", 2048)
 	allowedAddrs, err := gateway.ParseAllowedPGAddrs(os.Getenv("BARNACLE_PG_ALLOWED_ADDRS"))
 	if err != nil {
 		slog.Error("invalid PostgreSQL routing configuration", "error", err)
@@ -132,16 +88,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	pgSSLMode := env("BARNACLE_PG_SSLMODE", "require")
-	if pgSSLMode != "require" && pgSSLMode != "disable" {
-		slog.Error("BARNACLE_PG_SSLMODE must be require or disable")
-		os.Exit(1)
-	}
-	pgQueryExecMode := env("BARNACLE_PG_QUERY_EXEC_MODE", "exec")
-	if pgQueryExecMode != "exec" && pgQueryExecMode != "cache_describe" && pgQueryExecMode != "cache_statement" {
-		slog.Error("BARNACLE_PG_QUERY_EXEC_MODE must be exec, cache_describe, or cache_statement")
-		os.Exit(1)
-	}
+	pgSSLMode := choiceEnv("BARNACLE_PG_SSLMODE", "require", "require", "disable")
+	pgQueryExecMode := choiceEnv("BARNACLE_PG_QUERY_EXEC_MODE", "exec", "exec", "cache_describe", "cache_statement")
 	pgRootCAs, err := gateway.LoadPGRootCAs(os.Getenv("BARNACLE_PG_CA_FILE"), os.Getenv("BARNACLE_PG_EXTRA_CA_FILE"))
 	if err != nil {
 		slog.Error("invalid PostgreSQL CA file", "error", err)
@@ -391,10 +339,41 @@ func (r *publicCertificateReloader) reload() {
 	slog.Info("reloaded public TLS certificate and key")
 }
 
-func positiveIntEnv(key string, fallback int) (int, error) {
-	value, err := strconv.Atoi(env(key, strconv.Itoa(fallback)))
-	if err != nil || value <= 0 || int64(value) > int64(^uint64(0)>>1)/(1<<20) {
-		return 0, errors.New("invalid positive value")
+func exitf(message string, args ...any) {
+	slog.Error(message, args...)
+	os.Exit(1)
+}
+
+// durationEnv exits when the value does not parse or is below min.
+func durationEnv(key, fallback string, min time.Duration) time.Duration {
+	value, err := time.ParseDuration(env(key, fallback))
+	if err != nil || value < min {
+		exitf("invalid " + key)
 	}
-	return value, nil
+	return value
+}
+
+func choiceEnv(key, fallback string, choices ...string) string {
+	value := env(key, fallback)
+	if !slices.Contains(choices, value) {
+		exitf(key + " must be " + strings.Join(choices, ", "))
+	}
+	return value
+}
+
+func positiveIntEnv(key string, fallback int) int {
+	value, err := strconv.Atoi(env(key, strconv.Itoa(fallback)))
+	if err != nil || value <= 0 {
+		exitf("invalid " + key)
+	}
+	return value
+}
+
+// mibEnv rejects values whose byte count would overflow int64.
+func mibEnv(key string, fallback int) int {
+	value := positiveIntEnv(key, fallback)
+	if int64(value) > math.MaxInt64/(1<<20) {
+		exitf("invalid " + key)
+	}
+	return value
 }

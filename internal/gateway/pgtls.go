@@ -9,9 +9,9 @@ import (
 	"net"
 	"os"
 	"time"
-)
 
-var pgSSLRequest = [8]byte{0, 0, 0, 8, 4, 210, 22, 47}
+	"github.com/jackc/pgx/v5/pgproto3"
+)
 
 func LoadPGRootCAs(paths ...string) (*x509.CertPool, error) {
 	if len(paths) == 0 || len(paths) == 1 && paths[0] == "" {
@@ -65,7 +65,8 @@ func (c Config) DialPostgres(addr string) (net.Conn, error) {
 		backend.Close()
 		return nil, err
 	}
-	if err := writeFull(backend, pgSSLRequest[:]); err != nil {
+	sslRequest, _ := (&pgproto3.SSLRequest{}).Encode(nil)
+	if _, err := backend.Write(sslRequest); err != nil {
 		backend.Close()
 		return nil, err
 	}
@@ -93,18 +94,4 @@ func (c Config) DialPostgres(addr string) (net.Conn, error) {
 		return nil, err
 	}
 	return secured, nil
-}
-
-func writeFull(w io.Writer, p []byte) error {
-	for len(p) > 0 {
-		n, err := w.Write(p)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		p = p[n:]
-	}
-	return nil
 }

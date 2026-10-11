@@ -1,73 +1,14 @@
 package pgws
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha1"
-	"encoding/base64"
-	"encoding/binary"
-	"errors"
 	"io"
 	"net"
 	"net/http"
-	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
-	"unicode/utf8"
+
+	"github.com/coder/websocket"
 )
-
-const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-// wsWriter serializes data and control frames from separate relay goroutines.
-// Its deadline also stops a slow client from holding a database session forever.
-type wsWriter struct {
-	conn         net.Conn
-	mu           sync.Mutex
-	writeTimeout time.Duration
-	closing      atomic.Bool
-	closeSent    bool
-}
-
-func (w *wsWriter) frame(op byte, data []byte) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closeSent {
-		if op == 8 {
-			return nil
-		}
-		return net.ErrClosed
-	}
-	if w.closing.Load() && op != 8 {
-		return net.ErrClosed
-	}
-	if timeout := w.shutdownWriteTimeout(); timeout > 0 {
-		if err := w.conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-			return err
-		}
-	}
-	head := []byte{0x80 | op, 0}
-	switch {
-	case len(data) < 126:
-		head[1] = byte(len(data))
-	case len(data) <= 65535:
-		head[1] = 126
-		head = binary.BigEndian.AppendUint16(head, uint16(len(data)))
-	default:
-		head[1] = 127
-		head = binary.BigEndian.AppendUint64(head, uint64(len(data)))
-	}
-	if err := writeFull(w.conn, head); err != nil {
-		return err
-	}
-	if err := writeFull(w.conn, data); err != nil {
-		return err
-	}
-	if op == 8 {
-		w.closeSent = true
-	}
-	return nil
-}
 
 // Serve resolves and checks the PostgreSQL destination before upgrading. After
 // the 101 response, ordinary HTTP error responses are no longer possible.
@@ -78,16 +19,6 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !c.OriginAllowed(r) {
 		http.Error(w, "origin denied", http.StatusForbidden)
-		return
-	}
-	if r.Header.Get("Upgrade") != "websocket" || !strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") || r.Header.Get("Sec-Websocket-Version") != "13" {
-		http.Error(w, "websocket upgrade required", http.StatusBadRequest)
-		return
-	}
-	key := r.Header.Get("Sec-Websocket-Key")
-	decoded, err := base64.StdEncoding.DecodeString(key)
-	if err != nil || len(decoded) != 16 {
-		http.Error(w, "invalid websocket key", http.StatusBadRequest)
 		return
 	}
 	addresses := r.URL.Query()["address"]
@@ -117,34 +48,19 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer backend.Close()
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "websocket unavailable", http.StatusInternalServerError)
-		return
-	}
-	client, rw, err := hj.Hijack()
+	// Origin was checked above against the gateway's own policy, which the
+	// library's host-only comparison cannot express.
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		return
 	}
-	defer client.Close()
-	if c.WSWriteTimeout > 0 {
-		if err := client.SetWriteDeadline(time.Now().Add(c.WSWriteTimeout)); err != nil {
-			return
-		}
-	}
-	accept := sha1.Sum([]byte(key + wsGUID))
-	_, err = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(accept[:]) + "\r\n\r\n")
-	if err != nil {
-		return
-	}
-	if err = rw.Flush(); err != nil {
-		return
-	}
+	defer ws.CloseNow()
+	ws.SetReadLimit(-1) // Frames are streamed to PostgreSQL, never buffered whole.
+	client := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
 	// BackendKeyData arrives during PostgreSQL startup. Keep only its small
 	// cancellation key while forwarding all wire bytes without interpreting SQL.
-	writer := &wsWriter{conn: client, writeTimeout: c.WSWriteTimeout}
 	keyData := &backendKeyCapture{}
-	session := &wsSession{client: client, backend: backend, writer: writer, cancel: func(ctx context.Context) { c.cancelForShutdown(ctx, upstream, keyData) }}
+	session := &wsSession{ws: ws, backend: backend, cancel: func(ctx context.Context) { c.cancelForShutdown(ctx, upstream, keyData) }}
 	if !c.sessions.add(session) {
 		return
 	}
@@ -170,9 +86,9 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 					_ = client.SetReadDeadline(time.Now().Add(c.WSIdleTimeout))
 				}
 				keyData.feed(buf[:n])
-				if writer.frame(2, buf[:n]) != nil {
+				if _, err := (&deadlineWriter{conn: client, timeout: c.WSWriteTimeout}).Write(buf[:n]); err != nil {
 					// A slow or vanished client must not keep PostgreSQL busy.
-					cancel = true
+					cancel = !session.closing.Load()
 					return
 				}
 			}
@@ -182,127 +98,31 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	go func() {
-		_ = readWS(rw.Reader, &deadlineWriter{conn: backend, timeout: c.WSWriteTimeout}, writer, client, c.WSIdleTimeout)
-		// A valid close frame also abandons any query still running upstream.
+		_, _ = io.Copy(&deadlineWriter{conn: backend, timeout: c.WSWriteTimeout}, &idleReader{conn: client, timeout: c.WSIdleTimeout})
+		// A close frame also abandons any query still running upstream.
 		done <- relayEnd{cancel: true}
 	}()
 	ended := <-done
-	if ended.cancel && !writer.closing.Load() {
+	if ended.cancel && !session.closing.Load() {
 		c.cancelDisconnectedSession(upstream, keyData)
 	}
-	_ = client.Close()
+	_ = ws.CloseNow()
 	_ = backend.Close()
 	<-done
 }
 
-// readWS validates client-to-server framing and streams masked binary data
-// into PostgreSQL in fixed-size chunks. A frame may be much larger than RAM.
-func readWS(reader *bufio.Reader, backend io.Writer, writer *wsWriter, client net.Conn, idleTimeout time.Duration) error {
-	var fragmented bool
-	var buffer [32 << 10]byte
-	for {
-		if client != nil && idleTimeout > 0 {
-			if err := client.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
-				return err
-			}
-		}
-		b1, err := reader.ReadByte()
-		if err != nil {
-			return err
-		}
-		b2, err := reader.ReadByte()
-		if err != nil {
-			return err
-		}
-		fin := b1&0x80 != 0
-		op := b1 & 0x0f
-		if b1&0x70 != 0 || b2&0x80 == 0 {
-			// WebSocket clients must mask every frame. Reserved bits require
-			// extensions that this endpoint has not negotiated.
-			return errors.New("invalid websocket frame")
-		}
-		n := uint64(b2 & 0x7f)
-		if n == 126 {
-			var v uint16
-			if err = binary.Read(reader, binary.BigEndian, &v); err != nil {
-				return err
-			}
-			n = uint64(v)
-			if n < 126 {
-				return errors.New("noncanonical frame length")
-			}
-		} else if n == 127 {
-			if err = binary.Read(reader, binary.BigEndian, &n); err != nil {
-				return err
-			}
-			if n <= 65535 || n>>63 != 0 {
-				return errors.New("invalid frame length")
-			}
-		}
-		if op >= 8 && (!fin || n > 125) {
-			return errors.New("invalid control frame")
-		}
-		var mask [4]byte
-		if _, err = io.ReadFull(reader, mask[:]); err != nil {
-			return err
-		}
-		if op >= 8 {
-			payload := make([]byte, int(n))
-			if _, err = io.ReadFull(reader, payload); err != nil {
-				return err
-			}
-			for i := range payload {
-				payload[i] ^= mask[i%4]
-			}
-			switch op {
-			case 8:
-				if len(payload) == 1 || len(payload) >= 2 && (!validCloseCode(binary.BigEndian.Uint16(payload[:2])) || !utf8.Valid(payload[2:])) {
-					return errors.New("invalid close frame")
-				}
-				return writer.frame(8, payload)
-			case 9:
-				if err = writer.frame(10, payload); err != nil {
-					return err
-				}
-			case 10:
-			default:
-				return errors.New("unknown control frame")
-			}
-			continue
-		}
-		switch op {
-		case 2:
-			if fragmented {
-				return errors.New("unexpected binary frame")
-			}
-		case 0:
-			if !fragmented {
-				return errors.New("unexpected continuation")
-			}
-		default:
-			return errors.New("expected binary frame")
-		}
-		offset := uint64(0)
-		for n > 0 {
-			take := int(min(n, uint64(len(buffer))))
-			if _, err = io.ReadFull(reader, buffer[:take]); err != nil {
-				return err
-			}
-			for i := 0; i < take; i++ {
-				buffer[i] ^= mask[(offset+uint64(i))%4]
-			}
-			if err = writeFull(backend, buffer[:take]); err != nil {
-				return err
-			}
-			offset += uint64(take)
-			n -= uint64(take)
-		}
-		fragmented = !fin
-	}
+type idleReader struct {
+	conn    net.Conn
+	timeout time.Duration
 }
 
-func validCloseCode(code uint16) bool {
-	return code >= 1000 && code <= 4999 && code != 1004 && code != 1005 && code != 1006 && code != 1015
+func (r *idleReader) Read(p []byte) (int, error) {
+	if r.timeout > 0 {
+		if err := r.conn.SetReadDeadline(time.Now().Add(r.timeout)); err != nil {
+			return 0, err
+		}
+	}
+	return r.conn.Read(p)
 }
 
 type deadlineWriter struct {
@@ -317,18 +137,4 @@ func (w *deadlineWriter) Write(p []byte) (int, error) {
 		}
 	}
 	return w.conn.Write(p)
-}
-
-func writeFull(w io.Writer, p []byte) error {
-	for len(p) > 0 {
-		n, err := w.Write(p)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		p = p[n:]
-	}
-	return nil
 }

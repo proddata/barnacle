@@ -4,23 +4,25 @@ import (
 	"context"
 	"net"
 	"sync"
-	"time"
+	"sync/atomic"
+
+	"github.com/coder/websocket"
 )
 
 type wsSession struct {
-	client, backend net.Conn
-	writer          *wsWriter
-	cancel          func(context.Context)
+	ws      *websocket.Conn
+	backend net.Conn
+	closing atomic.Bool
+	cancel  func(context.Context)
 }
 
 func (s *wsSession) closeForShutdown(ctx context.Context) {
-	s.writer.closing.Store(true)
-	_ = s.client.SetWriteDeadline(time.Now().Add(time.Second))
-	_ = s.writer.frame(8, []byte{0x03, 0xe9}) // 1001: going away
+	s.closing.Store(true)
 	if s.cancel != nil {
 		s.cancel(ctx)
 	}
-	_ = s.client.Close()
+	// Sends 1001 and waits briefly for the peer's close frame.
+	_ = s.ws.Close(websocket.StatusGoingAway, "")
 	_ = s.backend.Close()
 }
 
@@ -103,17 +105,9 @@ func (r *sessionRegistry) shutdown(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		for _, session := range sessions {
-			_ = session.client.Close()
+			_ = session.ws.CloseNow()
 			_ = session.backend.Close()
 		}
 		return ctx.Err()
 	}
-}
-
-// Keep the close deadline short even when an ordinary frame has a longer limit.
-func (w *wsWriter) shutdownWriteTimeout() time.Duration {
-	if w.closing.Load() {
-		return time.Second
-	}
-	return w.writeTimeout
 }
