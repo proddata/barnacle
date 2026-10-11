@@ -172,9 +172,11 @@ try {
   }
   assert.ok(ready, 'Barnacle did not start for browser CORS test');
 
+  // The mock upstream does not speak PostgreSQL. Barnacle authenticates before it
+  // decodes the body, so a readable 502 shows that CORS allowed the response.
   for (const [port, expected] of [
-    [allowedPort, 'http:400 ws:open'],
-    [secondAllowedPort, 'http:400 ws:open'],
+    [allowedPort, 'http:502 ws:open'],
+    [secondAllowedPort, 'http:502 ws:open'],
     [deniedPort, 'http:blocked ws:blocked'],
   ]) {
     assert.equal(await browserResult(port), expected, `browser result from port ${port}`);

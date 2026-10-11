@@ -17,7 +17,11 @@ test('PostgreSQL authentication happens before JSON decoding', async () => {
   const wrong = new URL(databaseUrl);
   wrong.password = 'intentionally_wrong_request_limit_password';
   const response = await request('{"query":', wrong.toString());
-  assert.equal((await response.json()).code, '28P01');
+  const body = await response.json();
+  assert.equal(response.status, 400);
+  // PgBouncer reports a failed SCRAM check as 08P01 instead of PostgreSQL's 28P01.
+  const expected = process.env.BARNACLE_TEST_PGBOUNCER === '1' ? ['28P01', '08P01'] : ['28P01'];
+  assert.ok(expected.includes(body.code), `unexpected authentication error code ${body.code}`);
   assert.equal((await request('{"query":')).status, 400);
 });
 
