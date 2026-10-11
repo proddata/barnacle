@@ -148,3 +148,6 @@ func TestWebSocketUpstreamTLSRejectsPlaintext(t *testing.T) {
 	}
 	<-done
 }
+
+// The wire bytes of a PostgreSQL SSLRequest, written out independently of the encoder under test.
+var pgSSLRequest = [8]byte{0, 0, 0, 8, 4, 210, 22, 47}

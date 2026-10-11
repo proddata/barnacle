@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 // backendKeyCapture skips message bodies without retaining result rows. It only
@@ -78,12 +80,11 @@ func (c Handler) cancelPostgres(addr string, pid uint32, secret []byte) {
 	}
 	defer backend.Close()
 	_ = backend.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	packet := make([]byte, 12+len(secret))
-	binary.BigEndian.PutUint32(packet[:4], uint32(len(packet)))
-	binary.BigEndian.PutUint32(packet[4:8], 80877102)
-	binary.BigEndian.PutUint32(packet[8:12], pid)
-	copy(packet[12:], secret)
-	_ = writeFull(backend, packet)
+	packet, err := (&pgproto3.CancelRequest{ProcessID: pid, SecretKey: secret}).Encode(nil)
+	if err != nil {
+		return
+	}
+	_, _ = backend.Write(packet)
 }
 
 // cancelDisconnectedSession starts cancellation before Serve releases its
