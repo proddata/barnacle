@@ -110,9 +110,9 @@ The local [Compose stack](../compose.yaml) uses `BARNACLE_PG_ALLOWED_ADDRS=*` on
 
 - Terminate HTTPS/WSS at the ingress or enable Barnacle's direct TLS listener. Preserve the public `Host` when using an ingress. If the ingress sets `X-Forwarded-Proto`, set `BARNACLE_TRUSTED_PROXIES` to its immediate source IP or CIDR; Barnacle ignores that header from other peers. For a separate browser frontend, set exact origins in `BARNACLE_ALLOWED_ORIGIN`.
 - Keep credentials in connection strings and bearer tokens out of access logs. The optional console is a development service, not part of a production deployment.
-- Metrics are off unless `BARNACLE_METRICS=true`. When enabled, `/metrics` listens on `127.0.0.1:9090` by default, separate from client traffic. The main listener returns `404` for `/metrics`, and the metrics listener serves no other routes.
-- The metrics endpoint has no authentication. For a remote scraper, set `BARNACLE_METRICS_LISTEN` to a private interface and restrict access with a firewall or private ingress. The supplied HAProxy example also returns `404` for public `/metrics` requests.
-- In Compose, the metrics listener binds to `:9090` inside the Barnacle container and is not published on the host. The optional console proxies `/metrics` to that port. Keep the port at `9090` when using the console's Metrics view.
+- Metrics are enabled by default on Barnacle's main listener. Set `BARNACLE_METRICS=false` to disable them, or `BARNACLE_METRICS_LISTEN=127.0.0.1:9090` to serve `/metrics` on a separate loopback listener. With a separate listener, `/metrics` returns `404` on the main port and only `/metrics` is available on the metrics port.
+- The metrics endpoint has no authentication. If the main listener is public, block `/metrics` at the ingress; the supplied HAProxy example does this. For a remote scraper on a separate metrics listener, bind it to a private interface and restrict access with a firewall or private ingress.
+- Compose keeps metrics on Barnacle's main listener for the optional console. Both Barnacle and the console are published only on host loopback. If you set `BARNACLE_METRICS_LISTEN` in Compose, the console's Metrics view will no longer reach `/metrics` unless you also update its proxy target.
 - The [HAProxy example](../haproxy.cfg) allows hour-long WebSocket connections and forwards client disconnects. Keep the ingress timeout longer than Barnacle's `BARNACLE_WS_IDLE_TIMEOUT`. If another proxy terminates TLS before HAProxy, normalize the public scheme at that proxy and trust only the immediate proxy at each hop.
 - Set `BARNACLE_READY_PG_ADDR` when you want `/readyz` to probe one PostgreSQL TCP/TLS endpoint. It does not authenticate or verify every routed instance. Use target-specific checks if you need readiness for several databases.
 
@@ -139,8 +139,8 @@ The development Compose file passes these settings from shell variables or `.env
 | `BARNACLE_HTTP_WRITE_TIMEOUT` | `60s` | HTTP request and response deadline, including query and output |
 | `BARNACLE_HTTP_IDLE_TIMEOUT` | `60s` | Idle time between HTTP keep-alive requests |
 | `BARNACLE_READY_PG_ADDR` | empty | Optional TCP/TLS endpoint for `/readyz`; no login or SQL |
-| `BARNACLE_METRICS` | `false` | `true` starts the separate, unauthenticated metrics listener; other values fail startup |
-| `BARNACLE_METRICS_LISTEN` | `127.0.0.1:9090` | Metrics listener `host:port`; used only when `BARNACLE_METRICS=true` |
+| `BARNACLE_METRICS` | `true` | `false` disables `/metrics`; other values fail startup |
+| `BARNACLE_METRICS_LISTEN` | empty | Optional separate metrics `host:port`; empty serves `/metrics` on `BARNACLE_LISTEN` |
 | `BARNACLE_WS_IDLE_TIMEOUT` | `30m` | Close after this long without client frames or PostgreSQL output |
 | `BARNACLE_WS_WRITE_TIMEOUT` | `30s` | Deadline for each WebSocket or upstream write |
 | `BARNACLE_MAX_CONNECTIONS` | `32` | Maximum simultaneous HTTP and WebSocket upstream connections; excess gets 503 |

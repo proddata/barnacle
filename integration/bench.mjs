@@ -26,7 +26,7 @@ if (!['http', 'ws'].includes(transport) || !['docker', 'systemd'].includes(memor
 
 const base = process.env.BARNACLE_BASE_URL || 'http://127.0.0.1:8080';
 const databaseUrl = process.env.TEST_DATABASE_URL ||
-  'postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle';
+  'postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle';
 const endpoint = new URL(base);
 neonConfig.fetchEndpoint = `${base}/sql`;
 neonConfig.webSocketConstructor = WebSocket;
