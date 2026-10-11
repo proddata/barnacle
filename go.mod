@@ -2,7 +2,11 @@ module github.com/proddata/barnacle
 
 go 1.26.9
 
-require github.com/jackc/pgx/v5 v5.11.0
+require (
+	github.com/coder/websocket v1.8.15
+	github.com/jackc/pgx/v5 v5.11.0
+	github.com/klauspost/compress v1.20.1
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

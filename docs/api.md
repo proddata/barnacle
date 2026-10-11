@@ -155,7 +155,7 @@ Send one JSON object with either `query` or `queries`. There are no Barnacle-spe
 
 ### Request headers
 
-See [connection and authentication](#connection-and-authentication) and the [option header values](#query-options). Use `Content-Type: application/json`; `Accept-Encoding: gzip` enables compressed responses of at least 1 KiB. `Origin` is checked against the configured origin policy. See [deployment](deployment.md) for ingress and routing rules.
+See [connection and authentication](#connection-and-authentication) and the [option header values](#query-options). Use `Content-Type: application/json`; `Accept-Encoding: gzip` (or `zstd`) enables compressed responses of at least 1 KiB; when a client accepts both, Barnacle prefers zstd. `Origin` is checked against the configured origin policy. See [deployment](deployment.md) for ingress and routing rules.
 
 ### JSON body fields
 

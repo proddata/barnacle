@@ -4,8 +4,8 @@ Release:        1%{?dist}
 %global debug_package %{nil}
 Summary:        HTTP and WebSocket proxy for PostgreSQL
 # Barnacle is Apache-2.0; the statically linked Go standard library and modules
-# also include MIT and BSD-3-Clause licensed code (see THIRD-PARTY-NOTICES.md).
-License:        Apache-2.0 AND MIT AND BSD-3-Clause
+# also include MIT, BSD-3-Clause and ISC licensed code (see THIRD-PARTY-NOTICES.md).
+License:        Apache-2.0 AND MIT AND BSD-3-Clause AND ISC
 Source0:        %{name}-%{version}.tar.gz
 Source1:        %{name}-%{version}-vendor.tar.gz
 BuildRequires:  golang >= 1.26.9
