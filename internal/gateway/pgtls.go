@@ -36,6 +36,8 @@ func LoadPGRootCAs(paths ...string) (*x509.CertPool, error) {
 	return roots, nil
 }
 
+// PGTLSConfig verifies both the upstream certificate chain and its host name.
+// PGTLSServerName allows an explicit name when dialing a different address.
 func (c Config) PGTLSConfig(host string) *tls.Config {
 	serverName := host
 	if c.PGTLSServerName != "" {
@@ -44,6 +46,9 @@ func (c Config) PGTLSConfig(host string) *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName, RootCAs: c.PGRootCAs}
 }
 
+// DialPostgres performs PostgreSQL's SSLRequest before TLS negotiation. It
+// fails closed when TLS is required and the upstream refuses it or fails
+// certificate verification.
 func (c Config) DialPostgres(addr string) (net.Conn, error) {
 	backend, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {

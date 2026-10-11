@@ -63,8 +63,10 @@ func pgArrayParameter(values []any) (string, error) {
 	return "{" + strings.Join(parts, ",") + "}", nil
 }
 
+var pgArrayEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+
 func quotePGArray(value string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+	return `"` + pgArrayEscaper.Replace(value) + `"`
 }
 
 func pgTextValue(text string, oid uint32, types *pgtype.Map) (any, error) {

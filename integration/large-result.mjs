@@ -24,6 +24,10 @@ const databaseUrl = process.env.TEST_DATABASE_URL ||
   'postgres://barnacle:barnacle_dev_password@localhost:5432/barnacle';
 const endpoint = new URL(base);
 neonConfig.fetchEndpoint = `${base}/sql`;
+neonConfig.fetchFunction = (input, init) => fetch(input, {
+  ...init,
+  headers: { ...init.headers, 'Barnacle-Response-Mode': 'streaming' },
+});
 neonConfig.webSocketConstructor = WebSocket;
 neonConfig.useSecureWebSocket = endpoint.protocol === 'https:';
 neonConfig.wsProxy = () => `${endpoint.host}/v2`;

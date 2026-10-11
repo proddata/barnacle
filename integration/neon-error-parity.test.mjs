@@ -15,8 +15,15 @@ async function rawQuery(body) {
   });
 }
 
+test('request larger than 1 MiB is accepted under the 10 MiB default', async () => {
+  const bytes = 2 << 20;
+  const response = await rawQuery({ query: 'select length($1::text) as len', params: ['x'.repeat(bytes)] });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).rows[0].len, bytes);
+});
+
 test('oversized request uses Neon 413 behavior in raw fetch and the published driver', async () => {
-  const sqlText = `select 1 /* ${'x'.repeat(1 << 20)} */`;
+  const sqlText = `select 1 /* ${'x'.repeat(10 << 20)} */`;
   const response = await rawQuery({ query: sqlText });
   assert.equal(response.status, 413);
   const body = await response.json();

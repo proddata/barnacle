@@ -30,7 +30,9 @@ async function within(promise, label, ms = 3000) {
 }
 
 const backendSockets = new Set();
+let backendConnections = 0;
 const backend = createServer((socket) => {
+  backendConnections++;
   backendSockets.add(socket);
   socket.once('close', () => backendSockets.delete(socket));
 });
@@ -46,11 +48,9 @@ const child = spawn(binary, [], {
     BARNACLE_PG_ADDR: `127.0.0.1:${backendPort}`,
     BARNACLE_PG_SSLMODE: 'disable',
     BARNACLE_HTTP_READ_TIMEOUT: '350ms',
-    BARNACLE_HTTP_WRITE_TIMEOUT: '2s',
+    BARNACLE_QUERY_TIMEOUT: '2s',
     BARNACLE_HTTP_IDLE_TIMEOUT: '350ms',
     BARNACLE_WS_IDLE_TIMEOUT: '5s',
-    BARNACLE_OIDC_ISSUER: '',
-    BARNACLE_OIDC_AUDIENCE: '',
   },
   stdio: ['ignore', 'ignore', 'pipe'],
 });
@@ -91,10 +91,11 @@ try {
   assert.ok(ready, `Barnacle did not start: ${stderr}`);
 
   const slowBody = await requestUntilClosed(
-    `POST /sql HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 100\r\nContent-Type: application/json\r\n\r\n{`,
+    `POST /sql HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nNeon-Connection-String: postgres://app:secret@127.0.0.1:${backendPort}/app\r\nContent-Length: 100\r\nContent-Type: application/json\r\n\r\n{`,
     'slow HTTP body', true,
   );
   assert.match(slowBody, /HTTP\/1\.1 400/, 'incomplete body should fail after its read deadline');
+  assert.equal(backendConnections, 0, 'slow upload opened a PostgreSQL connection');
 
   const idleResponses = await Promise.all(Array.from({ length: 24 }, (_, index) => requestUntilClosed(
     `GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`,
@@ -111,7 +112,7 @@ try {
       ws.once('open', resolve);
       ws.once('error', reject);
     }), 'WebSocket upgrade');
-    await delay(2500); // Exceeds all HTTP deadlines; the upgrade must clear them.
+    await delay(3500); // Exceeds all HTTP deadlines; the upgrade must clear them.
     const pong = new Promise((resolve, reject) => {
       ws.once('pong', resolve);
       ws.once('error', reject);
@@ -145,14 +146,11 @@ const slowChild = spawn(binary, [], {
   env: {
     ...process.env,
     BARNACLE_LISTEN: `127.0.0.1:${slowPort}`,
-    BARNACLE_HTTP_WRITE_TIMEOUT: '500ms',
-    BARNACLE_QUERY_TIMEOUT: '5s',
+    BARNACLE_QUERY_TIMEOUT: '500ms',
     BARNACLE_MAX_HTTP_QUERIES: '1',
     BARNACLE_MAX_CONNECTIONS: '2',
     BARNACLE_METRICS: 'true',
     BARNACLE_METRICS_LISTEN: `127.0.0.1:${metricsPort}`,
-    BARNACLE_OIDC_ISSUER: '',
-    BARNACLE_OIDC_AUDIENCE: '',
   },
   stdio: ['ignore', 'ignore', 'pipe'],
 });
@@ -180,7 +178,7 @@ try {
   const body = JSON.stringify({ query: "select repeat('x', 8192) from generate_series(1, 10000)" });
   stalled.write(`POST /sql HTTP/1.1\r\nHost: 127.0.0.1:${slowPort}\r\nConnection: close\r\nNeon-Connection-String: ${databaseUrl}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 
-  await delay(1200);
+  await delay(2000);
   const metrics = await within(fetch(`${metricsBase}/metrics`).then((response) => response.text()), 'slow reader metrics');
   assert.match(metrics, /barnacle_sql_requests_total 1\n/, `stalled response did not finish: ${metrics}`);
   const probe = await within(fetch(`${slowBase}/sql`, {

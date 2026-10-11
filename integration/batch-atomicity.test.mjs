@@ -87,6 +87,21 @@ test('a statement timeout rolls back an earlier batch write', async () => {
   assert.equal(await count(label), 0);
 });
 
+test('per-query deadline resets for each statement in a batch', {
+  skip: !process.env.BARNACLE_SHORT_STATEMENT_BASE_URL,
+}, async () => {
+  const base = process.env.BARNACLE_SHORT_STATEMENT_BASE_URL;
+  const success = await batch(['select pg_sleep(0.7)', 'select pg_sleep(0.7)'], { base });
+  assert.equal(success.status, 200, JSON.stringify(success.body));
+  const label = 'query_deadline';
+  const failed = await batch([
+    `insert into ${table} values ('${label}')`,
+    'select pg_sleep(2)',
+  ], { base });
+  assert.notEqual(failed.status, 200);
+  assert.equal(await count(label), 0);
+});
+
 test('Barnacle request deadline rolls back an earlier batch write', {
   skip: !process.env.BARNACLE_BATCH_BINARY && !process.env.BARNACLE_BATCH_TIMEOUT_BASE_URL,
 }, async () => {
@@ -164,7 +179,7 @@ test('result-limit failure rolls back an earlier batch write', async () => {
   const label = 'result_limit';
   const response = await batch([
     `insert into ${table} values ('${label}')`,
-    ...Array.from({ length: 5 }, () => "select repeat('x', 1048576) as payload"),
+    ...Array.from({ length: 11 }, () => "select repeat('x', 1048576) as payload"),
   ]);
   assert.equal(response.status, 413);
   assert.equal(response.body.code, 'BARNACLE_ERROR');

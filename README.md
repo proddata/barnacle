@@ -29,7 +29,7 @@ flowchart LR
 
 A barnacle holds fast while the current moves around it. Barnacle anchors to the PostgreSQL setup you already run and meets serverless and browser clients over HTTP or WebSocket. Your data and SQL stay in PostgreSQL; Barnacle carries the traffic between those transports and the PostgreSQL wire protocol.
 
-Barnacle is [Apache-2.0 licensed](LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md). It is a [compatible subset](todo.md) of Neon's interface, not Neon's full proxy or platform routing.
+Barnacle is [Apache-2.0 licensed](LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) and the [Neon driver compatibility guide](docs/compatibility.md).
 
 Barnacle is independent and is not affiliated with or endorsed by Neon or Databricks. [Neon is part of Databricks](https://neon.com/brand); the Neon name and logo are trademarks of their respective owners.
 
@@ -68,7 +68,7 @@ curl -sS http://localhost:8080/healthz
 
 curl -sS http://localhost:8080/sql \
   -H 'Content-Type: application/json' \
-  -H 'Connection-String: postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle' \
+  -H 'Neon-Connection-String: postgres://barnacle:barnacle_dev_password@postgres:5432/barnacle' \
   -d '{"query":"select $1::int as answer","params":[42]}'
 ```
 

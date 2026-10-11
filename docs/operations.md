@@ -4,8 +4,6 @@ For upstream routing, TLS, and production checks, start with the [deployment gui
 
 ## Ubuntu and Debian service
 
-If migrating from an installed Hermit package, Barnacle is a separate package and systemd unit. Stop and disable `hermit.service` before starting `barnacle.service` on the same listen address. Copy the deployment settings from `/etc/default/hermit` or `/etc/sysconfig/hermit` into the new Barnacle environment file, changing each `HERMIT_` prefix to `BARNACLE_`; review paths for certificates, keys, and service drop-ins. Keep the old package and configuration until the new service has passed deployment checks, then remove them through the package manager. The database and its roles do not need renaming for an installed deployment.
-
 Install the `.deb` for your architecture from CI or [build it locally](development.md#release-binaries-container-and-debian-package), then edit `/etc/default/barnacle` and enable the service:
 
 ```sh
@@ -67,3 +65,7 @@ sudo systemctl restart barnacle
 ```
 
 Also adjust `GOMEMLIMIT` in `/etc/sysconfig/barnacle` when changing `MemoryMax`. If repeated failures hit the start limit, fix the cause and run `sudo systemctl reset-failed barnacle && sudo systemctl start barnacle`. `BARNACLE_MAX_CONNECTIONS=32` limits the PostgreSQL backends Barnacle can create across both transports; tune it below PostgreSQL's available connection budget. PostgreSQL still needs its own work memory and statement timeout settings.
+
+## Migrating an installed Hermit service
+
+Barnacle uses a separate package and systemd unit. Stop and disable `hermit.service` before starting `barnacle.service` on the same listen address. Copy the deployment settings from `/etc/default/hermit` or `/etc/sysconfig/hermit` into the Barnacle environment file, change each `HERMIT_` prefix to `BARNACLE_`, and review certificate, key, and service drop-in paths. Keep the old package and configuration until the new service passes deployment checks. The database and its roles do not need renaming.

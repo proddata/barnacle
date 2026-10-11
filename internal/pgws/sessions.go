@@ -24,6 +24,8 @@ func (s *wsSession) closeForShutdown(ctx context.Context) {
 	_ = s.backend.Close()
 }
 
+// sessionRegistry owns upgraded connections: http.Server.Shutdown does not
+// close hijacked WebSockets, so the gateway must drain them explicitly.
 type sessionRegistry struct {
 	mu       sync.Mutex
 	active   map[*wsSession]struct{}

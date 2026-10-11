@@ -15,6 +15,7 @@ import (
 
 var errHTTPResultTooLarge = errors.New("HTTP result exceeds configured size limit")
 
+// responseBudget counts uncompressed JSON bytes, regardless of HTTP gzip.
 type responseBudget struct {
 	writer    io.Writer
 	max, used int64
@@ -55,6 +56,8 @@ func canStream(rows pgx.Rows, types *pgtype.Map, rawText bool) bool {
 	return true
 }
 
+// streamSingle checks the first row before sending HTTP 200. Once headers are
+// sent, a later database or size error can only interrupt the JSON stream.
 func streamSingle(w http.ResponseWriter, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes, maxResponseBytes int64) error {
 	defer rows.Close()
 	fields := fieldsFromDescriptions(rows.FieldDescriptions())

@@ -1,25 +1,10 @@
 # Barnacle load measurements
 
-These are **observations**, not capacity guarantees. They were collected on 2026-10-01 with PostgreSQL 17 in Docker Compose, Barnacle limited to 256 MiB, Go `GOMEMLIMIT=160MiB`, and the published `@neondatabase/serverless` 1.2.0 driver. The host was Docker Desktop on macOS. Each profile ran for eight seconds; the runner requested Docker cgroup samples every 500 ms, but the Docker CLI produced only five or six samples per profile. The table reports the largest sampled value, so a shorter peak could have been missed. The runner now also reads the cgroup's recorded peak. All requests in this run completed with no errors or skips.
+These measurements provide a baseline for reproducing tests and comparing deployment hosts. They are not capacity ratings. The runs used PostgreSQL 17, the published Neon serverless driver, and Docker Desktop on macOS with Barnacle limited to 256 MiB. Database backend memory and CPU are outside the Barnacle memory figures. Run the same profiles with representative SQL and concurrency on the target host before setting service limits.
 
-| Transport | Connection cap / open WS | Target → achieved QPS | Query | Peak Barnacle memory | p95 latency |
-| --- | ---: | ---: | --- | ---: | ---: |
-| HTTP | 1 | 10 → 10.0 | `select 1` | 9.6 MiB | 15.6 ms |
-| HTTP | 8 | 50 → 49.9 | `select 1` | 12.5 MiB | 7.5 ms |
-| HTTP | 32 | 100 → 99.8 | `select 1` | 12.7 MiB | 6.0 ms |
-| HTTP | 32 | 100 → 97.5 | `pg_sleep(0.2)`; up to 25 queries in flight | 16.4 MiB | 208.4 ms |
-| HTTP | 8 | 50 → 49.9 | 8 KiB text result, gzip | 13.8 MiB | 8.2 ms |
-| WebSocket | 1 | 10 → 10.0 | `select 1` | 6.4 MiB | 5.4 ms |
-| WebSocket | 8 | 50 → 49.9 | `select 1` | 8.7 MiB | 4.1 ms |
-| WebSocket | 32 | 100 → 99.9 | `select 1` | 9.4 MiB | 3.5 ms |
+## Query throughput and memory
 
-The HTTP connection number is an **in-flight cap**. Fast HTTP queries typically use far fewer simultaneous PostgreSQL backends than that cap. The 200 ms case exercised overlap and observed 25 in flight. WebSocket clients remained connected throughout each run. Baseline Barnacle memory after each restart was about 6 MiB, except for the 200 ms case, which followed another benchmark and began at 13.9 MiB. Since its peak was 16.4 MiB, rerun profiles on a quiet target host before choosing production limits.
-
-These samples do not measure PostgreSQL backend memory, CPU saturation, maximum capacity, or short memory spikes between samples. PostgreSQL query shape, result size, authentication method, concurrent clients, HAProxy, and Fedora host memory will affect the numbers. For an installed Fedora service, `--memory-source=systemd` samples `MemoryCurrent` from `barnacle.service`; see the [benchmark instructions](docs/development.md#measure-memory-under-load).
-
-## 2026-10-06 local rerun
-
-After the current server changes, the eight preset profiles were rerun for ten seconds each against a freshly built Compose stack on Docker Desktop for macOS. The runner used the Compose PostgreSQL address `postgres:5432`; its former `localhost:5432` default caused every request to fail because `localhost` referred to the Barnacle container. Barnacle was restarted before each profile. Every preset request completed with no errors or skips. The memory columns distinguish the largest sampled usage from the cgroup's recorded peak.
+The eight query profiles below ran for ten seconds each on 2026-10-06. Barnacle was restarted between profiles. HTTP connections represent requests in flight; WebSocket connections stayed open. Every scheduled request completed without an error or skip. The memory column shows sampled usage and the cgroup's recorded peak.
 
 | Transport | Open WS / HTTP in-flight cap | Target → achieved QPS | Query | p95 latency | Sampled / cgroup peak MiB |
 | --- | ---: | ---: | --- | ---: | ---: |
@@ -32,48 +17,70 @@ After the current server changes, the eight preset profiles were rerun for ten s
 | WebSocket | 8 | 50 → 50.0 | `select 1` | 4.3 ms | 10.0 / 19.2 |
 | WebSocket | 32 | 100 → 99.9 | `select 1` | 3.6 ms | 12.3 / 19.1 |
 
-Two additional ten-second profiles repeated the earlier 500 QPS comparison with eight slots or sessions. HTTP completed 4,977 requests, skipped 23 when all eight slots were occupied, and had 7.2 ms p95 latency and a 16.9 / 21.4 MiB sampled / cgroup peak. WebSocket completed all 5,000 requests with 3.2 ms p95 latency and a 12.3 / 21.0 MiB peak. The earlier run recorded HTTP 4,981 completed, 19 skipped, and 6.7 ms p95; WebSocket completed 5,000 at 3.5 ms p95. These small differences are within the noise expected from separate Docker Desktop runs, not evidence of a material throughput change.
+At an offered 500 QPS, eight HTTP slots completed 4,977 requests in ten seconds, skipped 23 when all slots were busy, and had 7.2 ms p95 latency. Eight persistent WebSocket sessions completed all 5,000 at 3.2 ms p95. These local results do not include an ingress or a separate PostgreSQL host.
 
 ## 100 MiB result comparison
 
-These measurements were taken before the default HTTP size limits were added. The same query returned exactly 100 MiB of ASCII text in either 100 rows of 1 MiB or one row of 100 MiB. Each run followed a Barnacle container restart. `memory.peak` from Barnacle's cgroup records the peak even when a 200 ms sample misses it. HTTP used the published Neon driver and its normal gzip-capable `fetch()` path. The text repeats an MD5 digest, so it compresses strongly; these timings are not a comparison of uncompressed network throughput.
+For 100 rows of 1 MiB each, streaming HTTP completed with a 20.0 MiB Barnacle cgroup peak under the 256 MiB container limit. WebSocket completed the same shape near 16–17 MiB. A single 100 MiB HTTP row exceeded the default 8 MiB row limit and returned 413 before pgx allocated the full field; Barnacle peaked at 13.4 MiB. A 512 MiB streaming HTTP result also completed under the 256 MiB container limit, with a 19.4 MiB peak. These tests do not establish that every query shape or the full 2 GiB response limit fits within 256 MiB.
 
-| Shape | Transport | Barnacle limit | Result | Barnacle cgroup peak | Elapsed |
-| --- | --- | ---: | --- | ---: | ---: |
-| 100 × 1 MiB | WebSocket | 256 MiB | Completed | 17.1 MiB | 0.48 s |
-| 100 × 1 MiB | HTTP, streamed | 256 MiB | Completed | 20.5 MiB | 0.72 s |
-| 1 × 100 MiB | WebSocket | 256 MiB | Completed | 15.8 MiB | 0.50 s |
-| 1 × 100 MiB | HTTP, streamed | 256 MiB | Completed | 116.6 MiB | 0.75 s |
+The Neon driver's `neon()` API reads and parses the complete JSON response on the client. Streaming reduces Barnacle's result buffering, but callers still need enough memory for their result. A stream interrupted after HTTP headers are sent can end with incomplete JSON. See the [HTTP limits](docs/decisions/sql-http-limits.md) for current defaults.
 
-Before single-query streaming, the 100 × 1 MiB HTTP case OOM-killed Barnacle at the default 256 MiB limit. With a temporary 768 MiB limit it peaked at **342.0 MiB**; one 100 MiB HTTP row peaked at **410.8 MiB**. Streaming removed the all-rows JSON buffer and brought both cases below the default limit. Before the wire-size cap, the 100 MiB single row needed about 117 MiB inside Barnacle because pgx received the whole PostgreSQL field. WebSocket relays wire bytes in 32 KiB chunks.
-
-The client still holds the complete result: in the single-row run, the Node process peaked near 516 MiB over HTTP and 434 MiB over WebSocket. Neon's `neon()` API calls `response.json()`, so HTTP transfer streaming does not make the driver expose rows incrementally. These are single-query measurements on Docker Desktop. Barnacle now defaults to eight simultaneous HTTP queries, 8 MiB per row, 4 MiB of buffered result budget, and 128 MiB of response JSON. With pgx 5.11, its wire reader checked the PostgreSQL message size before allocating its body: a 100 MiB single-row test returned 413 with a **13.4 MiB** cgroup peak and no OOM. A 100 × 1 MiB streamed HTTP result completed at **20.0 MiB** peak.
-
-Reproduce a profile with the Compose stack running:
+Reproduce a large-result profile with the Compose stack running:
 
 ```sh
-docker compose restart barnacle
-node integration/large-result.mjs --transport=ws --rows=100 --row-mib=1
 docker compose restart barnacle
 node integration/large-result.mjs --transport=http --rows=100 --row-mib=1
 ```
 
-Both commands complete under the 256 MiB limit. To repeat the historical one-row HTTP measurement, run `BARNACLE_HTTP_MAX_ROW_MIB=128 docker compose up -d --force-recreate barnacle` before the test; the default returns 413. Recreate again without that variable to restore the default. A client or PostgreSQL error after HTTP headers have begun produces an interrupted JSON stream; the HTTP status cannot then be changed to a PostgreSQL error response.
+Use `--transport=ws` for the WebSocket comparison. The HTTP script opts into `Barnacle-Response-Mode: streaming`.
 
 ## HTTP connection reuse decision
 
-On 2026-10-03, a local Docker Desktop run used the Compose PostgreSQL 17 and Barnacle services, TLS between Barnacle and PostgreSQL, `select 1`, the published Neon driver, and a 256 MiB Barnacle limit. Each endpoint profile lasted ten seconds. `connections` capped HTTP requests in flight or kept that many WebSocket sessions open. PostgreSQL's `sessions` counter rose by approximately one per completed HTTP request; the Compose health check and statistics observer also create sessions. Barnacle was not restarted between these profiles, so the sampled memory peaks reflect a warmed process rather than isolated per-profile increments.
+Barnacle opens one upstream connection per HTTP request and keeps one per WebSocket session. In a separate ten-second local profile, eight HTTP slots completed 4,981 small queries with 6.7 ms p95 latency while eight WebSocket sessions completed 5,000 with 3.5 ms p95. A direct pgx probe measured fresh PostgreSQL connections at 4.79 ms p95 with one worker, compared with 0.25 ms p95 on a reused connection. The direct probe isolates connection setup and does not measure an HTTP pooling implementation.
 
-| Transport | Offered QPS | Completed / skipped | p50 / p95 / p99 | Barnacle sampled peak |
-| --- | ---: | ---: | ---: | ---: |
-| HTTP, 1 in flight | 100 | 882 / 118 | 3.6 / 4.0 / 5.0 ms | 13.2 MiB |
-| HTTP, 8 in flight | 200 | 1,999 / 1 | 4.3 / 5.1 / 5.9 ms | 16.3 MiB |
-| WebSocket, 8 open | 200 | 2,000 / 0 | 2.0 / 3.2 / 3.3 ms | 15.9 MiB |
-| HTTP, 8 in flight | 500 | 4,981 / 19 | 5.6 / 6.7 / 7.7 ms | 17.1 MiB |
-| WebSocket, 8 open | 500 | 5,000 / 0 | 2.1 / 3.5 / 4.2 ms | 17.4 MiB |
+The current design keeps one upstream connection per HTTP request. PgBouncer can pool PostgreSQL backend connections for stateless HTTP traffic, while WebSocket already provides persistent sessions. A pooler still leaves Barnacle-to-pooler connection setup in the request path. Measure that cost in the intended topology before changing the connection strategy. See [deployment](docs/deployment.md#postgresql-and-its-pooler) for pool-mode guidance.
 
-The [direct pgx probe](integration/connection-cost.go) isolates PostgreSQL connection setup from HTTP and WebSocket processing. It used TLS from the macOS host to PostgreSQL's localhost port in the same Compose stack. With one worker and 500 queries, a fresh connection per query had p50/p95 4.45/4.79 ms and 221 QPS; one reused connection had 0.19/0.25 ms and 4,635 QPS. With eight workers and 1,000 queries, fresh connections had p50/p95 7.79/10.47 ms and 990 QPS; reused connections had 0.43/0.61 ms and 15,188 QPS. PostgreSQL recorded about 500 or 1,000 new sessions in the fresh cases and only one or eight in the reused cases. The direct probe is **not** an HTTP pooling implementation, so its QPS and latency should not be substituted for Barnacle's HTTP results.
+Run the presets with `BENCH_SECONDS=10 ./integration/bench.sh` after starting Compose and installing the integration dependencies. For a single query scenario, use `node integration/bench.mjs --transport=http --connections=8 --qps=500 --seconds=10`. The presets also include WebSocket connection churn: 20 new authenticated sessions per second, at most 8 simultaneous handshakes and 24 open or connecting sessions, each held for 500 ms. Run it alone with:
 
-**Decision:** keep the current per-request HTTP connection behavior. It sustained roughly 500 small queries per second in this local setup with a 6.7 ms p95 and low Barnacle memory. A nearby [PgBouncer](https://www.pgbouncer.org/usage) can pool PostgreSQL server connections even while Barnacle opens one client connection for each HTTP request. This addresses backend session churn without putting credential and session-state management inside Barnacle. It does not remove the Barnacle-to-PgBouncer TCP/TLS/authentication cost, so the direct reuse probe still shows a possible latency benefit from a Barnacle-side pool. Measure the intended PgBouncer and Fedora deployment before reconsidering one. The PostgreSQL OAuth/OAUTHBEARER path has not been tested through PgBouncer; [PgBouncer authenticates its clients itself](https://www.pgbouncer.org/config), so do not assume that path will pass through unchanged. WebSocket already offers persistent client sessions when the application needs them.
+```sh
+node integration/bench.mjs --workload=churn --transport=ws --connections=24 --connect-rate=20 --connecting=8 --hold-ms=500 --seconds=10
+```
 
-To repeat the direct probe, expose the disposable Compose PostgreSQL port on localhost with a temporary override, then set `TEST_DATABASE_URL` to that port with `sslmode=require` and run `go run integration/connection-cost.go -mode=fresh -workers=1 -queries=500` and the corresponding `-mode=reuse` command. The endpoint profiles use `node integration/bench.mjs --transport=http --connections=8 --qps=500 --seconds=10` or `--transport=ws`. These numbers are host-specific; Docker Desktop networking and TLS affect them.
+The churn report includes successful connections per second, PostgreSQL startup latency, the maximum number of handshakes and open sessions, failed and rejected connections, locally skipped attempts, and Barnacle memory. Raising `--connections` above `BARNACLE_MAX_CONNECTIONS` can exercise its 503 limit. A skipped attempt was stopped by the benchmark's own caps and never reached Barnacle. For an installed systemd service, use `--memory-source=systemd`. The [development guide](docs/development.md#measure-memory-under-load) has the complete commands.
+
+## HTTP request validation cost
+
+On 2026-10-11, the request hardening was compared with a snapshot of the working tree taken immediately before that change. Both binaries used Go 1.26.9 and pgx 5.11.0 on an Apple M3 Pro. The end-to-end test used an isolated local PostgreSQL 14 cluster with SCRAM, HTTP keep-alive, and one fresh upstream connection per request. Four rounds alternated binary order, with 15 seconds between samples to avoid exhausting local ephemeral ports. Each workload warmed up with 16 requests, then measured 120 requests at concurrency 1 and 320 at concurrency 8.
+
+| Workload | Before → after requests/s, concurrency 1 | Before → after requests/s, concurrency 8 | Before → after p95 ms, concurrency 8 |
+| --- | ---: | ---: | ---: |
+| Simple query | 367 → 446 | 1,579 → 1,922 | 8.63 → 5.39 |
+| Scalar parameters | 438 → 490 | 1,288 → 1,932 | 12.56 → 5.33 |
+| JSON object and nested array parameters | 375 → 500 | 1,833 → 1,959 | 6.04 → 5.31 |
+| 64 KiB text parameter | 380 → 377 | 1,423 → 1,480 | 7.54 → 6.70 |
+| Ten-query batch | 395 → 436 | 1,593 → 1,699 | 6.36 → 5.97 |
+
+Values are medians of the four samples. The largest median throughput decrease was 1.0%. Host scheduling varied considerably, so the apparent throughput gains should not be attributed to the change. These measurements found no large end-to-end regression; they do not establish production capacity or cover TLS, OAuth validators, or PgBouncer.
+
+Separate Go benchmarks measured upload buffering, decoding, and PostgreSQL parameter conversion without connection or query time. Medians of five 300 ms samples:
+
+| Input | Before → after time | Before → after allocated bytes |
+| --- | ---: | ---: |
+| Simple query | 0.755 → 0.937 µs | 1,216 → 1,824 |
+| Five scalar parameters | 1.284 → 1.524 µs | 1,600 → 2,208 |
+| Object and nested array parameters | 2.315 → 2.600 µs | 2,537 → 3,145 |
+| 100-query batch | 49.377 → 49.034 µs | 37,200 → 45,568 |
+| 64 KiB string parameter | 260.229 → 295.975 µs | 326,369 → 472,769 |
+| Array of 2,000 small objects | 2,692.797 → 917.347 µs | 14,626,070 → 1,245,645 |
+
+Raw upload buffering and the complexity scan add measurable parsing cost, around 0.2 µs for a simple query and 36 µs for the 64 KiB parameter. Reusing the PostgreSQL array string escaper removes repeated large allocations for array elements. The normal request path still performs a single PostgreSQL authentication exchange and preserves numeric precision.
+
+A 2.29 MiB body containing 300,000 small object parameters previously expanded before checking credentials. The isolated upload/decode benchmark allocated 135.8 MiB and took 64.4 ms; the new upload and complexity rejection allocated 4.8 MiB and took 0.31 ms (medians of three samples). These are cumulative allocations, not process RSS. Missing or oversized credentials now reject even before upload buffering; failed PostgreSQL authentication skips JSON decoding. Tests also verify the five-second authentication deadline, slot release, and that slow uploads open no upstream connection.
+
+Run the current parsing benchmarks with:
+
+```sh
+go test ./internal/sqlhttp -run '^$' -bench 'Benchmark(RequestDecode|RejectComplexRequest)' -benchmem -count=5
+```
+
+With a test gateway and PostgreSQL running, set `BARNACLE_BASE_URL` and `TEST_DATABASE_URL`, then run `node integration/request-benchmark.mjs` for the HTTP workloads. It prints requests/s and p50/p95 milliseconds as JSON. The benchmark creates thousands of PostgreSQL connections; space repeated runs apart when comparing binaries on the same host.

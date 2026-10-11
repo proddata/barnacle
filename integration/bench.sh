@@ -30,3 +30,4 @@ run --transport=http --connections=8 --qps=50 --payload-bytes=8192
 run --transport=ws --connections=1 --qps=10
 run --transport=ws --connections=8 --qps=50
 run --transport=ws --connections=32 --qps=100
+run --workload=churn --transport=ws --connections=24 --connect-rate=20 --connecting=8 --hold-ms=500

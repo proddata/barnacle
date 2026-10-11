@@ -117,3 +117,23 @@ test('abrupt WebSocket disconnect releases its PostgreSQL session', {
     return rows[0].count === 0;
   }, 'disconnected WebSocket retained a PostgreSQL session', 2000);
 });
+
+test('clean WebSocket close cancels an active PostgreSQL query', {
+  skip: process.env.BARNACLE_TEST_PGBOUNCER === '1' && 'PgBouncer may retain the idle PostgreSQL backend after the client disconnects',
+}, async () => {
+  const name = `barnacle_ws_clean_close_${process.pid}`;
+  const client = new Client(namedUrl(name));
+  client.on('error', () => {}); // Expected when closing during an active query.
+  await client.connect();
+  const running = client.query('select pg_sleep(20)');
+  void running.catch(() => {});
+  await waitUntil(async () => await activeCount(name) === 1, 'WebSocket query did not start');
+  const socket = client.connection.stream.ws;
+  assert.ok(socket, 'Neon Client has no WebSocket to close');
+  const closed = new Promise((resolve) => socket.once('close', resolve));
+  socket.close(1000);
+  await closed;
+  await assert.rejects(running);
+  await waitUntil(async () => await activeCount(name) === 0,
+    'clean WebSocket close left the PostgreSQL query active', 3000);
+});

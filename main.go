@@ -1,3 +1,6 @@
+// Barnacle serves SQL over HTTP and PostgreSQL wire traffic over WebSocket.
+// PostgreSQL authenticates clients; this process enforces routing, transport,
+// origin, and resource policies around those connections.
 package main
 
 import (
@@ -31,9 +34,14 @@ func env(key, fallback string) string {
 }
 
 func main() {
-	timeout, err := time.ParseDuration(env("BARNACLE_QUERY_TIMEOUT", "30s"))
+	timeout, err := time.ParseDuration(env("BARNACLE_QUERY_TIMEOUT", "10m"))
 	if err != nil || timeout <= 0 {
 		slog.Error("invalid BARNACLE_QUERY_TIMEOUT")
+		os.Exit(1)
+	}
+	statementTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_STATEMENT_TIMEOUT", "60s"))
+	if err != nil || statementTimeout < time.Millisecond {
+		slog.Error("invalid BARNACLE_HTTP_STATEMENT_TIMEOUT")
 		os.Exit(1)
 	}
 	httpReadTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_READ_TIMEOUT", "15s"))
@@ -41,9 +49,11 @@ func main() {
 		slog.Error("invalid BARNACLE_HTTP_READ_TIMEOUT")
 		os.Exit(1)
 	}
-	httpWriteTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_WRITE_TIMEOUT", "60s"))
-	if err != nil || httpWriteTimeout <= 0 {
-		slog.Error("invalid BARNACLE_HTTP_WRITE_TIMEOUT")
+	// Give the SQL handler's request deadline time to finish before the HTTP
+	// server cuts off its response write.
+	httpWriteTimeout := timeout + time.Second
+	if httpWriteTimeout <= timeout {
+		slog.Error("BARNACLE_QUERY_TIMEOUT is too large")
 		os.Exit(1)
 	}
 	httpIdleTimeout, err := time.ParseDuration(env("BARNACLE_HTTP_IDLE_TIMEOUT", "60s"))
@@ -71,17 +81,22 @@ func main() {
 		slog.Error("invalid BARNACLE_MAX_HTTP_QUERIES")
 		os.Exit(1)
 	}
+	maxHTTPRequestMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_REQUEST_MIB", 10)
+	if err != nil {
+		slog.Error("invalid BARNACLE_HTTP_MAX_REQUEST_MIB")
+		os.Exit(1)
+	}
 	maxHTTPRowMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_ROW_MIB", 8)
 	if err != nil {
 		slog.Error("invalid BARNACLE_HTTP_MAX_ROW_MIB")
 		os.Exit(1)
 	}
-	maxHTTPBufferedMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_BUFFERED_MIB", 4)
+	maxHTTPBufferedMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_BUFFERED_MIB", 10)
 	if err != nil {
 		slog.Error("invalid BARNACLE_HTTP_MAX_BUFFERED_MIB")
 		os.Exit(1)
 	}
-	maxHTTPResponseMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_RESPONSE_MIB", 128)
+	maxHTTPResponseMiB, err := positiveIntEnv("BARNACLE_HTTP_MAX_RESPONSE_MIB", 2048)
 	if err != nil {
 		slog.Error("invalid BARNACLE_HTTP_MAX_RESPONSE_MIB")
 		os.Exit(1)
@@ -142,6 +157,9 @@ func main() {
 		slog.Error("invalid BARNACLE_TRUSTED_PROXIES", "error", err)
 		os.Exit(1)
 	}
+	// These channels bound concurrent database work across both transports.
+	// Cancellation uses a separate, smaller budget because it opens a new
+	// PostgreSQL connection to stop abandoned WebSocket queries.
 	cfg := gateway.Config{
 		Listen:               env("BARNACLE_LISTEN", ":8080"),
 		PGAddr:               defaultPGAddr,
@@ -154,25 +172,18 @@ func main() {
 		AllowedOrigins:       allowedOrigins,
 		TrustedProxies:       trustedProxies,
 		QueryTimeout:         timeout,
+		StatementTimeout:     statementTimeout,
 		WSIdleTimeout:        wsIdleTimeout,
 		WSWriteTimeout:       wsWriteTimeout,
 		UpstreamSlots:        make(chan struct{}, maxConnections),
 		CancelSlots:          make(chan struct{}, min(8, maxConnections)),
 		HTTPSlots:            make(chan struct{}, maxHTTPQueries),
 		ReadySlots:           make(chan struct{}, 1),
+		MaxHTTPRequestBytes:  int64(maxHTTPRequestMiB) << 20,
 		MaxHTTPRowBytes:      int64(maxHTTPRowMiB) << 20,
 		MaxHTTPBufferedBytes: int64(maxHTTPBufferedMiB) << 20,
 		MaxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
 		Metrics:              &gateway.Metrics{},
-	}
-	issuer := os.Getenv("BARNACLE_OIDC_ISSUER")
-	audience := os.Getenv("BARNACLE_OIDC_AUDIENCE")
-	if issuer != "" || audience != "" {
-		cfg.OIDC, err = gateway.NewOIDCGate(context.Background(), issuer, audience, nil)
-		if err != nil {
-			slog.Error("OIDC configuration failed", "error", err)
-			os.Exit(1)
-		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })

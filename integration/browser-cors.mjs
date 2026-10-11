@@ -90,8 +90,6 @@ const child = spawn(binary, [], {
     BARNACLE_PG_ADDR: `127.0.0.1:${mockPort}`,
     BARNACLE_PG_SSLMODE: 'disable',
     BARNACLE_ALLOWED_ORIGIN: `http://127.0.0.1:${allowedPort}, http://127.0.0.1:${secondAllowedPort}`,
-    BARNACLE_OIDC_ISSUER: '',
-    BARNACLE_OIDC_AUDIENCE: '',
   },
   stdio: 'ignore',
 });

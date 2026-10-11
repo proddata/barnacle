@@ -12,9 +12,6 @@ BARNACLE_MAX_CONNECTIONS=32
 # BARNACLE_METRICS_LISTEN=127.0.0.1:9090
 # BARNACLE_HTTP_READ_TIMEOUT=15s
 # BARNACLE_HTTP_IDLE_TIMEOUT=60s
-# Set both values to require RFC 9068 access tokens before HTTP or WebSocket reaches PostgreSQL.
-# BARNACLE_OIDC_ISSUER=https://issuer.example.com/
-# BARNACLE_OIDC_AUDIENCE=barnacle-api
 # Keep Go's garbage collector below the systemd service memory ceiling.
 GOMEMLIMIT=160MiB
 # Set BARNACLE_ALLOWED_ORIGIN=https://app.example.com for a separate browser app.

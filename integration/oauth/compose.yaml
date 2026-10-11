@@ -45,11 +45,6 @@ services:
       BARNACLE_LISTEN: :8080
       BARNACLE_PG_ADDR: postgres:5432
       BARNACLE_PG_SSLMODE: disable
-      BARNACLE_OIDC_ISSUER: https://issuer:8443
-      BARNACLE_OIDC_AUDIENCE: https://postgres.example.internal/
-      SSL_CERT_FILE: /fixture/ca.crt
-    volumes:
-      - ${BARNACLE_OAUTH_FIXTURE_DIR:?set by run.mjs}/ca.crt:/fixture/ca.crt:ro
     ports:
       - 127.0.0.1:${BARNACLE_OAUTH_PORT:?set by run.mjs}:8080
     depends_on:

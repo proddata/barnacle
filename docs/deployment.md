@@ -61,7 +61,7 @@ flowchart LR
 
 The client's HTTP connection-string host or WebSocket `?address=` selects one route. A client with valid database credentials can choose the direct path and bypass the pooler; if that should be forbidden for some clients, use separate Barnacle instances with different ingress and authentication policies. Size `BARNACLE_MAX_CONNECTIONS` and the pooler against PostgreSQL's connection budget.
 
-Use the direct path or session pooling for WebSocket clients that rely on `SET`, temporary tables, or other session state. Transaction pooling suits stateless HTTP queries and batches; statement pooling cannot run Barnacle's transactional HTTP batches. See [PgBouncer's feature matrix](https://www.pgbouncer.org/features.html). Barnacle's default `BARNACLE_PG_QUERY_EXEC_MODE=exec` avoids named prepared statements in HTTP queries. If you set `cache_statement`, check the pooler's named-statement support. A pooler authenticates clients and has its own separate TLS connection to PostgreSQL; verify both legs.
+Use the direct path or session pooling for WebSocket clients that rely on `SET`, temporary tables, or other session state. Transaction pooling suits stateless HTTP queries and batches; statement pooling cannot run Barnacle's transactional HTTP batches. See [PgBouncer's feature matrix](https://www.pgbouncer.org/features.html). Barnacle applies its HTTP query deadline without changing PostgreSQL startup parameters. PostgreSQL's own `statement_timeout` is a separate database or role setting. The default `BARNACLE_PG_QUERY_EXEC_MODE=exec` avoids named prepared statements in HTTP queries; if you set `cache_statement`, check the pooler's named-statement support. A pooler authenticates clients and has its own separate TLS connection to PostgreSQL; verify both legs.
 
 ## Several PostgreSQL instances
 
@@ -104,7 +104,7 @@ The requested address must match an allowlist entry exactly, including its port;
 
 The WebSocket client sends PostgreSQL wire messages inside WSS; Barnacle then starts its own verified TLS connection upstream. Keep the Neon driver's `forceDisablePgSSL=true` default for this arrangement; Barnacle does not forward an inner PostgreSQL TLS handshake inside WebSocket. See [driver configuration](https://github.com/neondatabase/serverless/blob/main/CONFIG.md).
 
-The local [Compose stack](../compose.yaml) uses `BARNACLE_PG_ALLOWED_ADDRS=*` only so its optional debug console can try arbitrary hosts. Do not use `*` for a shared or public gateway: it lets a caller direct Barnacle to any reachable `host:port`. An allowlist is also not a firewall; restrict Barnacle's network egress to the approved databases and any OIDC issuer, and restrict database ingress to expected clients. DNS resolution and network policy determine the actual IPs reached.
+The local [Compose stack](../compose.yaml) uses `BARNACLE_PG_ALLOWED_ADDRS=*` only so its optional debug console can try arbitrary hosts. Do not use `*` for a shared or public gateway: it lets a caller direct Barnacle to any reachable `host:port`. An allowlist is also not a firewall; restrict Barnacle's network egress to the approved databases, and restrict database ingress to expected clients. DNS resolution and network policy determine the actual IPs reached.
 
 ## Ingress, browser access, and operations
 
@@ -131,12 +131,12 @@ The development Compose file passes these settings from shell variables or `.env
 | `BARNACLE_PG_ALLOWED_ADDRS` | empty | Allow exact `host:port` routes; `*` permits any destination and is used by local Compose |
 | `BARNACLE_PG_SSLMODE` | `require` | Verified upstream TLS; `disable` permits plaintext on a trusted local network |
 | `BARNACLE_PG_QUERY_EXEC_MODE` | `exec` | HTTP pgx mode: `exec`, `cache_describe`, or `cache_statement` |
+| `BARNACLE_HTTP_STATEMENT_TIMEOUT` | `60s` | Time allowed for each HTTP query; resets between batch queries |
 | `BARNACLE_PG_TLS_SERVER_NAME` | empty | Optional certificate name override for every upstream |
 | `BARNACLE_PG_CA_FILE` | empty | PEM CA bundle added to system trust roots |
 | `BARNACLE_PG_EXTRA_CA_FILE` | empty | Second optional PEM CA bundle |
-| `BARNACLE_QUERY_TIMEOUT` | `30s` | HTTP connect and whole-query or batch deadline |
+| `BARNACLE_QUERY_TIMEOUT` | `10m` | Time allowed for a whole SQL HTTP request, including batches and streaming |
 | `BARNACLE_HTTP_READ_TIMEOUT` | `15s` | Time to read an HTTP request, including its body |
-| `BARNACLE_HTTP_WRITE_TIMEOUT` | `60s` | HTTP request and response deadline, including query and output |
 | `BARNACLE_HTTP_IDLE_TIMEOUT` | `60s` | Idle time between HTTP keep-alive requests |
 | `BARNACLE_READY_PG_ADDR` | empty | Optional TCP/TLS endpoint for `/readyz`; no login or SQL |
 | `BARNACLE_METRICS` | `true` | `false` disables `/metrics`; other values fail startup |
@@ -144,23 +144,24 @@ The development Compose file passes these settings from shell variables or `.env
 | `BARNACLE_WS_IDLE_TIMEOUT` | `30m` | Close after this long without client frames or PostgreSQL output |
 | `BARNACLE_WS_WRITE_TIMEOUT` | `30s` | Deadline for each WebSocket or upstream write |
 | `BARNACLE_MAX_CONNECTIONS` | `32` | Maximum simultaneous HTTP and WebSocket upstream connections; excess gets 503 |
-| `BARNACLE_MAX_HTTP_QUERIES` | `8` | Maximum concurrent HTTP queries; excess gets 503 |
+| `BARNACLE_MAX_HTTP_QUERIES` | `8` | Maximum concurrent `/sql` requests, including body reading; excess gets 503 |
+| `BARNACLE_HTTP_MAX_REQUEST_MIB` | `10` | Maximum `/sql` JSON request body in MiB |
 | `BARNACLE_HTTP_MAX_ROW_MIB` | `8` | Maximum raw PostgreSQL field data in one HTTP row |
-| `BARNACLE_HTTP_MAX_BUFFERED_MIB` | `4` | Buffer limit for a batch or custom-type result |
-| `BARNACLE_HTTP_MAX_RESPONSE_MIB` | `128` | Maximum uncompressed HTTP result JSON bytes |
-| `BARNACLE_OIDC_ISSUER` | empty | Issuer URL; set with audience to enable the access-token gate |
-| `BARNACLE_OIDC_AUDIENCE` | empty | Required resource audience when the gate is enabled |
+| `BARNACLE_HTTP_MAX_BUFFERED_MIB` | `10` | Buffer limit for a single query or batch result |
+| `BARNACLE_HTTP_MAX_RESPONSE_MIB` | `2048` | Maximum uncompressed HTTP result JSON bytes (2 GiB); also applies to streaming |
 | `BARNACLE_ALLOWED_ORIGIN` | empty | Comma-separated exact browser origins |
 | `BARNACLE_TRUSTED_PROXIES` | empty | Immediate reverse-proxy IPs or CIDRs allowed to set `X-Forwarded-Proto` |
 
 For direct TLS, point the two file settings at a certificate valid for the public DNS name and its private key, then use `https://` and `wss://` URLs. The files must be readable by the Barnacle process when it starts. Barnacle checks both files every minute and uses a changed, matching pair for new connections without a restart. If a rotation temporarily leaves the files missing or mismatched, new connections continue with the last working pair and Barnacle logs the reload failure. Existing connections keep their established TLS session. TLS settings apply to the main listener only; a separate metrics listener stays HTTP and should remain private.
 
-`BARNACLE_QUERY_TIMEOUT` covers a whole HTTP batch, not each statement. `BARNACLE_HTTP_WRITE_TIMEOUT` must leave time to send the response after query work. WebSocket sessions have no whole-session deadline; their idle and per-write limits apply after upgrade. Set PostgreSQL's own `statement_timeout` for database-side query limits.
+Each batch query gets its own 60-second limit, while the complete HTTP request is limited to 10 minutes. Single queries buffer by default; `Barnacle-Response-Mode: streaming` allows larger results. For a database-side timeout, configure PostgreSQL's `statement_timeout` separately. WebSocket sessions use their own idle and write limits.
 
-## Before serving traffic
+## Deployment verification
 
 1. Confirm the ingress reaches `/sql` and `/v2` and does not log credentials. Check browser Origin behavior through the real proxy chain.
 2. Try an unlisted database address. Fixed mode must still use its configured destination; routed mode must reject it.
 3. Verify every allowed destination's TLS name and CA, and test the pooler-to-PostgreSQL TLS leg separately if used.
 4. Check database roles, connection budgets, query timeouts, and a long-lived WebSocket session with the intended pool mode.
 5. Confirm network rules block Barnacle from unrelated database IPs and block untrusted clients from reaching PostgreSQL or the pooler.
+
+Run representative queries and load on the target host. Check result sizes, concurrent WebSocket sessions, slow clients, PostgreSQL restarts, memory peaks, and 503 responses. Set alerts for error rates, saturation, restarts, and readiness failures. If using PostgreSQL OAuth, include validator and issuer outages. Validate package rollback and certificate rotation as part of the release procedure.

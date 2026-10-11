@@ -1,3 +1,6 @@
+// Package pgws tunnels PostgreSQL's wire protocol over WebSocket. The client
+// and PostgreSQL perform authentication inside the tunnel; this package checks
+// the route, limits resources, and handles disconnects.
 package pgws
 
 import (

@@ -66,6 +66,8 @@ func (p *backendKeyCapture) key() (uint32, []byte) {
 	return p.pid, append([]byte(nil), p.secret...)
 }
 
+// cancelPostgres uses PostgreSQL's separate CancelRequest connection. Closing
+// the original socket alone may leave a running query active on the server.
 func (c Handler) cancelPostgres(addr string, pid uint32, secret []byte) {
 	if len(secret) == 0 {
 		return
@@ -84,17 +86,17 @@ func (c Handler) cancelPostgres(addr string, pid uint32, secret []byte) {
 	_ = writeFull(backend, packet)
 }
 
+// cancelDisconnectedSession starts cancellation before Serve releases its
+// upstream slot, so disconnect churn cannot silently discard cancel requests.
 func (c Handler) cancelDisconnectedSession(addr string, key *backendKeyCapture) {
 	pid, secret := key.key()
 	if len(secret) == 0 {
 		return
 	}
 	if c.CancelSlots != nil {
-		select {
-		case c.CancelSlots <- struct{}{}:
-		default:
-			return
-		}
+		// Keep the session's upstream slot until a cancellation slot is available.
+		// Dropping this request would let an abandoned query run to completion.
+		c.CancelSlots <- struct{}{}
 	}
 	go func() {
 		if c.CancelSlots != nil {
