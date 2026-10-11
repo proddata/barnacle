@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,7 +17,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/proddata/barnacle/internal/gateway"
 )
 
 const pgRowMessageOverhead = 16 << 10 // PostgreSQL allows at most 1,600 columns.
@@ -95,12 +93,12 @@ func optionBool(r *http.Request, header string, body *bool) (bool, error) {
 		return false, err
 	}
 	if body != nil {
-		if len(r.Header.Values(header))+len(r.Header.Values("Neon-"+header)) > 0 {
-			return false, fmt.Errorf("use either options or %s", header)
+		if len(r.Header.Values("Neon-"+header)) > 0 {
+			return false, fmt.Errorf("use either options or Neon-%s", header)
 		}
 		return *body, nil
 	}
-	if len(r.Header.Values(header))+len(r.Header.Values("Neon-"+header)) == 0 {
+	if len(r.Header.Values("Neon-"+header)) == 0 {
 		return false, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -109,14 +107,14 @@ func optionBool(r *http.Request, header string, body *bool) (bool, error) {
 	case "false":
 		return false, nil
 	default:
-		return false, fmt.Errorf("%s must be true or false", header)
+		return false, fmt.Errorf("Neon-%s must be true or false", header)
 	}
 }
 
 func optionString(r *http.Request, header string, body *string) (string, error) {
-	values := append(r.Header.Values(header), r.Header.Values("Neon-"+header)...)
+	values := r.Header.Values("Neon-" + header)
 	if len(values) > 1 || body != nil && len(values) > 0 {
-		return "", fmt.Errorf("use one value for %s or Neon-%s", header, header)
+		return "", fmt.Errorf("use one value for Neon-%s or options", header)
 	}
 	if body != nil {
 		return *body, nil
@@ -125,6 +123,36 @@ func optionString(r *http.Request, header string, body *string) (string, error) 
 		return values[0], nil
 	}
 	return "", nil
+}
+
+func responseMode(r *http.Request, batch bool) (bool, error) {
+	values := r.Header.Values("Barnacle-Response-Mode")
+	if len(values) == 0 {
+		return false, nil
+	}
+	if batch || len(values) != 1 {
+		return false, errors.New("Barnacle-Response-Mode requires one value on a single query")
+	}
+	switch strings.ToLower(strings.TrimSpace(values[0])) {
+	case "buffered":
+		return false, nil
+	case "streaming":
+		return true, nil
+	default:
+		return false, errors.New("Barnacle-Response-Mode must be buffered or streaming")
+	}
+}
+
+func rejectLegacyHeaders(r *http.Request) error {
+	if len(r.Header.Values("Barnacle-Batch-Mode")) > 0 {
+		return errors.New("Barnacle-Batch-Mode is unsupported")
+	}
+	for _, name := range []string{"Connection-String", "Array-Mode", "Raw-Text-Output", "Batch-Read-Only", "Batch-Isolation-Level", "Batch-Deferrable"} {
+		if len(r.Header.Values(name)) > 0 {
+			return fmt.Errorf("%s is unsupported; use Neon-%s", name, name)
+		}
+	}
+	return nil
 }
 
 type field struct {
@@ -177,21 +205,28 @@ func apiError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]any{"message": err.Error(), "code": "BARNACLE_ERROR"})
 }
 
+// connectionConfig treats the client connection string as credentials and a
+// possible route request, not as authority over the actual network target.
+// PostgreSQL validates passwords or OAuth tokens after the gateway connects.
 func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
-	connectionHeaders := r.Header.Values("Connection-String")
 	neonHeaders := r.Header.Values("Neon-Connection-String")
-	if len(connectionHeaders)+len(neonHeaders) > 1 {
-		return nil, errors.New("use one connection header: Connection-String or Neon-Connection-String")
+	if len(neonHeaders) > 1 {
+		return nil, errors.New("use one Neon-Connection-String header")
 	}
 	raw := ""
-	if len(connectionHeaders) == 1 {
-		raw = connectionHeaders[0]
-	} else if len(neonHeaders) == 1 {
+	if len(neonHeaders) == 1 {
 		raw = neonHeaders[0]
 	}
+	authorizations := r.Header.Values("Authorization")
+	if len(authorizations) > 1 {
+		return nil, errors.New("use one Authorization header")
+	}
 	authorization := r.Header.Get("Authorization")
+	if len(raw) > maxConnectionStringBytes || len(authorization) > maxBearerTokenBytes+len("Bearer ") {
+		return nil, errCredentialSize
+	}
 	if raw == "" {
-		return nil, errors.New("Connection-String or Neon-Connection-String required")
+		return nil, errors.New("Neon-Connection-String required")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Opaque != "" || u.Fragment != "" {
@@ -202,6 +237,8 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 		return nil, errors.New("expected Authorization: Basic <credentials> or Bearer <token>")
 	}
 	if hasAuthScheme && strings.EqualFold(authScheme, "Basic") {
+		// Basic supplies a PostgreSQL username and password; it is not an
+		// independent gateway login.
 		user, password, ok := r.BasicAuth()
 		if !ok || user == "" || password == "" {
 			return nil, errors.New("expected Authorization: Basic <credentials>")
@@ -220,6 +257,11 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	if suppliedUser == "" || u.Path == "" || u.Path == "/" {
 		return nil, errors.New("database and user required")
 	}
+	if len(suppliedUser) > maxUsernameBytes || len(suppliedPassword) > maxPasswordBytes || len(strings.TrimPrefix(u.Path, "/")) > maxDatabaseBytes {
+		return nil, errCredentialSize
+	}
+	// Reject connection-string options that could alter transport, routing,
+	// authentication, or other behavior outside this gateway's policy.
 	for key, values := range u.Query() {
 		switch key {
 		case "sslmode", "channel_binding", "application_name":
@@ -257,6 +299,8 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	}
 	pgcfg.Host = host
 	pgcfg.Port = uint16(port)
+	// pgx may parse alternate hosts from a connection string. Never let one
+	// bypass the selected and checked upstream address.
 	pgcfg.Fallbacks = nil
 	switch c.PGQueryExecMode {
 	case "", "exec":
@@ -278,24 +322,26 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	} else {
 		return nil, errors.New("BARNACLE_PG_SSLMODE must be disable or require")
 	}
+	if pgcfg.RequireAuth == "" {
+		// Accept only PostgreSQL password authentication methods by default.
+		// Bearer requests below replace this with OAuth alone.
+		pgcfg.RequireAuth = "password,md5,scram-sha-256"
+	}
 	if authorization != "" && !strings.EqualFold(authScheme, "Basic") {
 		scheme, token, ok := strings.Cut(authorization, " ")
 		if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
 			return nil, errors.New("expected Authorization: Bearer <token>")
 		}
 		bearer := strings.TrimSpace(token)
+		if len(bearer) > maxBearerTokenBytes {
+			return nil, errCredentialSize
+		}
 		pgcfg.OAuthTokenProvider = func(context.Context) (string, error) {
 			return bearer, nil
 		}
-		if c.OIDC != nil {
-			// A verified access token must only be sent with PostgreSQL OAuth.
-			// Reject SCRAM/password/unauthenticated server configurations.
-			pgcfg.Password = ""
-			pgcfg.RequireAuth = "oauth"
-		} else {
-			// Preserve password-shaped bearer tokens for legacy setups.
-			pgcfg.Password = bearer
-		}
+		// Do not offer a bearer token as a password if the server lacks OAuth.
+		pgcfg.Password = ""
+		pgcfg.RequireAuth = "oauth"
 	}
 	if pgcfg.User == "" || pgcfg.Database == "" {
 		return nil, errors.New("database and user required")
@@ -303,66 +349,37 @@ func (c Handler) connectionConfig(r *http.Request) (*pgx.ConnConfig, error) {
 	return pgcfg, nil
 }
 
+// Serve enforces resource limits before execution. It reads a bounded request
+// body before acquiring a database slot, then lets PostgreSQL authenticate
+// before decoding or executing the submitted SQL.
 func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), c.QueryTimeout)
+	defer cancel()
 	if !c.AllowOrigin(w, r) {
 		return
 	}
-	if !c.AuthorizeHTTP(w, r) {
-		return
-	}
-	var req queryRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.UseNumber()
-	if err := decoder.Decode(&req); err != nil {
-		requestDecodeError(w, err)
-		return
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		var oversized *http.MaxBytesError
-		if errors.As(err, &oversized) {
-			requestDecodeError(w, err)
-		} else {
-			apiError(w, 400, errors.New("one JSON object required"))
-		}
-		return
-	}
-	if req.Connection != nil {
-		apiError(w, 400, errors.New("connection must be supplied in Connection-String or Neon-Connection-String header"))
-		return
-	}
-	batch := req.Queries != nil
-	if batch && req.Query != "" || !batch && req.Query == "" {
-		apiError(w, 400, errors.New("provide query or queries"))
-		return
-	}
-	queries := req.Queries
-	if !batch {
-		queries = []query{{Query: req.Query, Params: req.Params, ArrayMode: req.ArrayMode}}
-	}
-	if len(queries) == 0 || len(queries) > 100 {
-		apiError(w, 400, errors.New("expected 1 to 100 queries"))
-		return
-	}
-	requestOptions, err := optionsForRequest(r, req, batch)
-	if err != nil {
+	if err := rejectLegacyHeaders(r); err != nil {
 		apiError(w, 400, err)
 		return
 	}
 	if !c.AcquireHTTP() {
 		c.Metrics.RejectHTTPQuery()
-		apiError(w, http.StatusServiceUnavailable, errors.New("HTTP query limit reached"))
+		apiError(w, http.StatusServiceUnavailable, errors.New("HTTP request limit reached"))
 		return
 	}
 	defer c.ReleaseHTTP()
-	for _, q := range queries {
-		if strings.TrimSpace(q.Query) == "" {
-			apiError(w, 400, errors.New("empty query"))
-			return
-		}
-	}
 	pgcfg, err := c.connectionConfig(r)
 	if err != nil {
-		apiError(w, 400, err)
+		status := http.StatusBadRequest
+		if errors.Is(err, errCredentialSize) {
+			status = http.StatusRequestHeaderFieldsTooLarge
+		}
+		apiError(w, status, err)
+		return
+	}
+	body, err := readRequestBody(w, r, c.MaxHTTPRequestBytes)
+	if err != nil {
+		requestDecodeError(w, err)
 		return
 	}
 	if !c.AcquireUpstream() {
@@ -371,19 +388,25 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.ReleaseUpstream()
-	ctx, cancel := context.WithTimeout(r.Context(), c.QueryTimeout)
-	defer cancel()
-	conn, err := pgx.ConnectConfig(ctx, pgcfg)
+	connectCtx, connectCancel := context.WithTimeout(ctx, httpConnectTimeout)
+	conn, err := pgx.ConnectConfig(connectCtx, pgcfg)
+	connectCancel()
 	if err != nil {
 		c.Metrics.UpstreamFailure()
 		dbConnectError(w, err, pgcfg.RequireAuth == "oauth" && pgcfg.OAuthTokenProvider != nil)
 		return
 	}
 	defer conn.Close(context.Background())
+	parsed, err := decodeRequest(r, body)
+	if err != nil {
+		requestDecodeError(w, err)
+		return
+	}
+	queries, batch, requestOptions, streaming := parsed.queries, parsed.batch, parsed.options, parsed.streaming
 	arrayMode := requestOptions.arrayMode
 	rawText := requestOptions.rawText
 	rowLimit := c.MaxHTTPRowBytes
-	if batch {
+	if batch || !streaming {
 		rowLimit = min(rowLimit, c.MaxHTTPBufferedBytes)
 	}
 	conn.PgConn().Frontend().SetMaxBodyLen(int(rowLimit) + pgRowMessageOverhead)
@@ -399,6 +422,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 			dbError(w, err)
 			return
 		}
+		// Any later decode, query, or size error leaves the batch uncommitted.
 		defer tx.Rollback(context.Background())
 		runner = tx
 	}
@@ -416,21 +440,28 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		args = append([]any{pgx.QueryResultFormats{pgx.TextFormatCode}}, args...)
-		rows, err := runner.Query(ctx, q.Query, args...)
+		queryCtx, queryCancel := ctx, func() {}
+		if c.StatementTimeout > 0 {
+			queryCtx, queryCancel = context.WithTimeout(ctx, c.StatementTimeout)
+		}
+		rows, err := runner.Query(queryCtx, q.Query, args...)
 		if err != nil {
+			queryCancel()
 			dbError(w, err)
 			return
 		}
-		if !batch && canStream(rows, conn.TypeMap(), rawText) {
+		if streaming && canStream(rows, conn.TypeMap(), rawText) {
 			if err := streamSingle(w, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, c.MaxHTTPResponseBytes); err != nil {
 				kind := interruptedResultKind(err)
 				c.Metrics.InterruptHTTPStream(kind)
 				slog.Warn("HTTP result stream interrupted", "kind", kind)
 			}
+			queryCancel()
 			return
 		}
 		conn.PgConn().Frontend().SetMaxBodyLen(int(min(c.MaxHTTPBufferedBytes, bufferedRemaining)) + pgRowMessageOverhead)
-		item, err := collect(ctx, rows, conn.TypeMap(), queryArrayMode, rawText, &bufferedRemaining)
+		item, err := collect(queryCtx, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, &bufferedRemaining)
+		queryCancel()
 		if err != nil {
 			if errors.Is(err, errHTTPResultTooLarge) {
 				apiError(w, http.StatusRequestEntityTooLarge, err)
@@ -443,6 +474,8 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 	var encodedBatch []byte
 	if batch {
+		// Encode within the response limit before committing: an oversized
+		// response must not leave successful writes behind.
 		encodedBatch, err = encodeLimitedJSON(map[string]any{"results": results}, c.MaxHTTPResponseBytes)
 		if err != nil {
 			if errors.Is(err, errHTTPResultTooLarge) {
@@ -469,6 +502,10 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func requestDecodeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errRequestComplexity) {
+		apiError(w, http.StatusRequestEntityTooLarge, err)
+		return
+	}
 	var oversized *http.MaxBytesError
 	if errors.As(err, &oversized) {
 		apiError(w, http.StatusRequestEntityTooLarge, errors.New("request is too large"))
@@ -477,7 +514,7 @@ func requestDecodeError(w http.ResponseWriter, err error) {
 	apiError(w, http.StatusBadRequest, err)
 }
 
-func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, remaining *int64) (result, error) {
+func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes int64, remaining *int64) (result, error) {
 	defer rows.Close()
 	descriptions := rows.FieldDescriptions()
 	fields := fieldsFromDescriptions(descriptions)
@@ -491,6 +528,9 @@ func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, r
 			break
 		}
 		values := rows.RawValues()
+		if !rowWithinLimit(values, maxRowBytes) {
+			return result{}, errHTTPResultTooLarge
+		}
 		// Rows and column containers consume memory even when every field is empty.
 		cost := int64(64 + 64*len(values))
 		for _, value := range values {
@@ -655,7 +695,7 @@ func dbError(w http.ResponseWriter, err error) {
 	var connectErr *pgconn.ConnectError
 	if errors.As(err, &connectErr) && strings.Contains(connectErr.Error(), "OAuth authentication failed:") {
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-		apiError(w, http.StatusUnauthorized, gateway.ErrInvalidToken)
+		apiError(w, http.StatusUnauthorized, errors.New("invalid access token"))
 		return
 	}
 	var pgerr *pgconn.PgError

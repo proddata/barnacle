@@ -61,7 +61,6 @@ log_probe="barnacle-log-probe-$$"
 curl --silent --show-error --fail --cacert "$tls_dir/ca.crt" \
     -H "Authorization: Bearer $log_canary" \
     -H "Neon-Connection-String: postgres://test:$log_canary@localhost/test" \
-    -H "Cookie: barnacle_access_token=$log_canary" \
     "https://127.0.0.1:8443/healthz?probe=$log_probe" >/dev/null
 proxy_logs=$(docker compose -f compose.yaml -f integration/tls/compose.yaml logs --no-color haproxy barnacle)
 if ! printf '%s\n' "$proxy_logs" | grep -Fq "$log_probe"; then

@@ -49,3 +49,30 @@ func TestShutdownCancellationWaitsOnlyUntilDeadline(t *testing.T) {
 		t.Fatal("shutdown cancellation disturbed a busy slot")
 	}
 }
+
+func TestDisconnectedCancellationWaitsForSlot(t *testing.T) {
+	key := &backendKeyCapture{}
+	key.feed([]byte{'K', 0, 0, 0, 12, 0, 0, 0, 42, 1, 2, 3, 4})
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	handler := New(&gateway.Config{CancelSlots: slots})
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		handler.cancelDisconnectedSession("127.0.0.1:1", key)
+		close(done)
+	}()
+	<-started
+	select {
+	case <-done:
+		t.Fatal("busy cancellation slot caused request to be dropped")
+	case <-time.After(50 * time.Millisecond):
+	}
+	<-slots
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not proceed after a slot became available")
+	}
+}

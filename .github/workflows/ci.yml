@@ -82,7 +82,7 @@ jobs:
       - run: go vet ./...
       - name: Go vulnerability scan
         env:
-          GOTOOLCHAIN: auto
+          GOTOOLCHAIN: local
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - run: npm ci --prefix integration
       - name: npm dependency audit
@@ -297,6 +297,12 @@ jobs:
       - run: npm ci --prefix integration
       - name: Build static Linux binaries
         run: ./packaging/release/build.sh
+      - name: Scan release binaries
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary dist/barnacle-linux-amd64
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary dist/barnacle-linux-arm64
       - name: Build and inspect Debian packages
         run: |
           ./packaging/deb/build.sh

@@ -1,41 +1,56 @@
 # SQL-over-HTTP limits
 
-- **Status:** Proposed — production defaults have not been decided
-- **Date:** 2026-10-03
-- **Scope:** Barnacle's `/sql` endpoint on a small Fedora host near PostgreSQL
+These are Barnacle's current defaults for `/sql`. The [deployment guide](../deployment.md#configuration-reference) lists the settings you can change.
 
-## Question
+| Limit | Default | If exceeded |
+| --- | ---: | --- |
+| Request body | 10 MiB | The request returns `413`. |
+| JSON nesting | 32 containers | The authenticated request returns `413`. |
+| JSON tokens per request | 16,384 | The authenticated request returns `413`. |
+| Parameters per query | 4,096 | The authenticated request returns `413`. |
+| Connection URL / bearer token | 16 KiB each | The request returns `431` before reading the body. |
+| Decoded username / database name | 1 KiB each | The request returns `431` before reading the body. |
+| Decoded password | 4 KiB | The request returns `431` before reading the body. |
+| Queries in one batch | 100 | A larger batch returns `400`. |
+| Data in one row | 8 MiB | The result is rejected. |
+| Buffered result | 10 MiB | A single query or batch returns `413`. |
+| Uncompressed response JSON | 2 GiB | Streaming stops if it reaches this limit. |
+| Concurrent `/sql` requests | 8 | Additional requests return `503`. |
+| Upstream connections, including WebSockets | 32 | Additional connections return `503`. |
+| PostgreSQL connection and authentication | 5 seconds | Connection fails; no JSON decoding or SQL execution. |
+| Time per HTTP query | 60 seconds | The query is canceled. Each batch query gets its own timer. |
+| Time for the whole HTTP request | 10 minutes | The request is canceled, including a batch or streamed result. |
+| Time to read an HTTP request | 15 seconds | A slow or incomplete request is closed. |
 
-Which request, result, time, and concurrency limits should ship for the intended workload? The current values are intended to protect a 256 MiB Barnacle service, but they have not been sized on the target Fedora host. Keep the current defaults until a release profile is measured and approved.
+## Request parsing
 
-## Reference point
+The HTTP slot is acquired before reading the upload. Credential and routing headers are validated first, including a 16 KiB plus seven-byte Authorization header cap. Barnacle reads the complete raw body under the byte limit before acquiring an upstream slot. Slow uploads therefore cannot occupy PostgreSQL connections. PostgreSQL authentication must succeed before JSON decoding; its five-second timer is also bounded by the remaining whole-request deadline.
 
-The inspected Neon proxy source sets default SQL-over-HTTP request and response sizes to **10 MiB each**. Its SQL handler reads the request with the configured limit and checks buffered response JSON while adding rows. These are proxy configuration defaults, not a promise about every Neon deployment or a precise bound on a single row. See [Neon's proxy options](https://github.com/neondatabase/neon/blob/main/proxy/src/binary/proxy.rs) and [SQL-over-HTTP handler](https://github.com/neondatabase/neon/blob/main/proxy/src/serverless/sql_over_http.rs).
+After authentication, an allocation-free scan bounds nesting and tokens before JSON decoding allocates maps, arrays, or parameter values. Tokens include object keys, scalar values, and opening containers throughout the request, including unknown and duplicate fields. A JSON document encoded inside a string counts as one string and remains subject to the body byte limit. Number precision and PostgreSQL array conversion are preserved. The fixed complexity and credential limits apply independently of the configurable body limit.
 
-Barnacle streams ordinary single-query JSON rows, but buffers batches and some custom-type results. That makes a larger total response possible with low proxy memory when rows are individually small. The Neon JavaScript driver still calls `response.json()` and retains the entire result on the client. Barnacle's 256 MiB systemd `MemoryMax` is a separate final safeguard; an OOM kill drops active connections.
+This follows OWASP guidance to [bound input complexity before parsing allocations](https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html#parse-safely-then-validate) and [limit resource use and timeouts](https://cheatsheetseries.owasp.org/cheatsheets/Denial_of_Service_Cheat_Sheet.html). The numeric limits are Barnacle policy choices, not OWASP-prescribed values.
 
-## Proposed choices
+## Choosing a response mode
 
-| Limit | Current Barnacle value | Proposal and reason | Evidence needed before changing |
-| --- | --- | --- | --- |
-| HTTP request body | 1 MiB, fixed in code | **Keep provisionally; make configurable before committing to a production value.** It is below Neon's 10 MiB source default and may reject large parameter sets. A higher cap increases concurrent JSON decoding and parameter memory. | Largest real request bodies; 8 concurrent near-limit requests under the 256 MiB service limit; rejection behavior. |
-| Queries per batch | 100, fixed in code | **Keep provisionally.** It bounds transaction time and per-batch bookkeeping, but it is an arbitrary compatibility limit. | Largest real transactions and their duration, memory, and rollback behavior. |
-| Raw PostgreSQL data in one HTTP row | 8 MiB, `BARNACLE_HTTP_MAX_ROW_MIB` | **Keep 8 MiB by default.** pgx must materialize a PostgreSQL row; the cap prevents one field from consuming most of the service's memory. Raise only for a demonstrated workload. | Peak cgroup memory for the required row size at concurrent load. |
-| Buffered batch/custom-type result | 4 MiB, `BARNACLE_HTTP_MAX_BUFFERED_MIB` | **Keep 4 MiB initially.** These paths retain results in memory. This may be the first practical limit for batches returning many rows. | Representative largest batch, including many small rows, at concurrent load. |
-| Uncompressed response JSON | 128 MiB, `BARNACLE_HTTP_MAX_RESPONSE_MIB` | **Keep provisionally for streamed single queries; reconsider the public contract.** It allows a 100 MiB many-row result at low proxy memory, but greatly exceeds Neon's 10 MiB source default and can consume substantial client memory. Once streaming has begun, crossing the cap interrupts JSON instead of returning a clean HTTP 413. | Client memory and latency at the largest allowed result; whether callers need a structured size error; expected result size distribution. |
-| Concurrent HTTP queries | 8, `BARNACLE_MAX_HTTP_QUERIES` | **Keep as the small-instance starting cap.** It protects CPU, upstream connections, and memory; bursts above it receive 503. | Target QPS and p95/p99 under slow queries and large results; 503 rate. |
-| Total upstream connections | 32, `BARNACLE_MAX_CONNECTIONS` | **Keep as the starting cap and size against PostgreSQL's connection budget.** HTTP and WebSocket sessions share it. PgBouncer may reduce PostgreSQL backend use, but Barnacle still holds client connections. | Concurrent WebSockets, HTTP overlap, PostgreSQL or PgBouncer limits, and memory per connection. |
-| HTTP connect and query deadline | 30 seconds, `BARNACLE_QUERY_TIMEOUT` | **Keep initially.** Set a PostgreSQL `statement_timeout` for the deployment as well. Longer legitimate queries need an explicit workload decision. | Query duration distribution, cancellation behavior, and recovery from database stalls. |
-| HTTP request read deadline | 15 seconds, `BARNACLE_HTTP_READ_TIMEOUT` | **Keep initially.** It bounds clients that send bodies slowly. | Legitimate upload duration through the actual ingress and slow-client tests. |
+Single queries and batches buffer results by default. The 10 MiB buffer limit applies to the complete result, so a batch shares it across all its queries. For example, 500 rows averaging about 20 KiB of raw values approach the limit; large text, JSON, or binary fields can reach it sooner. The size of the table does not matter, only the rows returned.
 
-The row, buffer, response, and concurrency values are configurable today. The request-body and batch-count limits require code changes to alter; changing their proposed defaults should include configuration support and integration tests.
+For a single query that needs a larger result, send `Barnacle-Response-Mode: streaming`. This avoids the 10 MiB total buffer limit, while the 8 MiB per-row and 2 GiB response limits still apply. Some custom types still need buffering. Streaming reduces Barnacle's memory use, but the Neon JavaScript driver reads the full JSON response into client memory.
 
-## Evidence already collected
+The 2 GiB limit is a maximum response size, not a transfer-time guarantee. Barnacle cancels database work after 60 seconds per query and ends the whole HTTP request after 10 minutes. A slow client or database may hit a time limit first.
 
-- Under a 256 MiB Barnacle cgroup, a 100 MiB single row used about **116.6 MiB** before the wire-size cap. With the default 8 MiB row cap, it returned 413 at a **13.4 MiB** peak. A 100 × 1 MiB HTTP result completed at about **20 MiB** peak. See [large-result measurements](../../benchmarks.md#100-mib-result-comparison).
-- A local small-query test completed about **500 HTTP QPS** with eight in-flight slots, **6.7 ms p95**, and about **17 MiB** sampled Barnacle peak. This is a Docker Desktop result, not a target-host capacity guarantee. See [connection-cost measurements](../../benchmarks.md#http-connection-reuse-decision).
-- Existing integration tests check HTTP 413 behavior for oversized rows and buffered results. [Current settings](../deployment.md#configuration-reference) and [implementation](../../internal/sqlhttp/sql.go) define the enforced limits.
+## What callers see
 
-## Decision gate
+- Oversized bodies return `413` before connecting to PostgreSQL. Missing, malformed, duplicate, or oversized credential headers are rejected before reading the body. Failed PostgreSQL authentication takes precedence over JSON errors. After authentication, excessive JSON complexity returns `413` and malformed JSON returns `400`; both close the connection without executing SQL.
+- Oversized buffered results return `413`. A batch with more than 100 queries returns `400`; requests over the connection or concurrency limit return `503`.
+- A streamed response may already have begun when a later row, timeout, or response limit causes it to stop. In that case the client may see HTTP `200` with incomplete JSON rather than a new error status.
+- Ordinary transactional batches roll back earlier writes when a later query or result limit fails before commit. A single write query can complete in PostgreSQL before Barnacle discovers that its result is too large.
 
-Before release, run the representative workload on the intended Fedora host with its actual ingress, PostgreSQL or PgBouncer path, TLS, and auth mode. Include near-limit request bodies, large single rows, many-row responses, batches, concurrent slow queries, and WebSockets. Record Barnacle cgroup peak/RSS, client memory, PostgreSQL connections, p95/p99, 413/503 counts, interrupted JSON, and restart behavior. Decide the production values and update this document, the packaged sysconfig, and the README deployment guidance together.
+## Test results
+
+- Request hardening was compared against the prior implementation: the 300,000-object expansion payload now rejects with 4.8 MiB cumulative allocations instead of 135.8 MiB. Local HTTP measurements found no large throughput regression. See [request validation benchmarks](../../benchmarks.md#http-request-validation-cost) for parsing overhead, methodology, and limitations.
+
+- A 512 MiB result streamed successfully through a Barnacle container limited to 256 MiB; the container peaked at 19.4 MiB. A full 2 GiB response was not tested.
+- Eight concurrent buffered queries, each returning 8 MiB, completed in a 256 MiB container. Peak memory was 218.8 MiB with the earlier 10 MiB JSON response cap.
+- A short per-query limit reset between batch queries. A slower query was canceled and its earlier batch write rolled back; cancellation also worked through PgBouncer transaction pooling.
+
+These are local Docker measurements, not a capacity guarantee for the target host. See the [larger result](../../benchmarks.md#100-mib-result-comparison) and [connection](../../benchmarks.md#http-connection-reuse-decision) benchmarks for more detail.

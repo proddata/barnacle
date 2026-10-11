@@ -79,12 +79,12 @@ func TestForwardedSchemeRequiresTrustedImmediatePeer(t *testing.T) {
 	}
 }
 
-func TestQueryPreflightAllowsConnectionAliases(t *testing.T) {
+func TestQueryPreflightAllowsNeonAndBarnacleHeaders(t *testing.T) {
 	response := httptest.NewRecorder()
 	(Config{}).Preflight(response, httptest.NewRequest(http.MethodOptions, "http://localhost/sql", nil))
 	allowed := response.Header().Get("Access-Control-Allow-Headers")
-	if response.Code != http.StatusNoContent || !strings.Contains(allowed, "Connection-String, Neon-Connection-String") || !strings.Contains(allowed, "Array-Mode, Neon-Array-Mode") || !strings.Contains(allowed, "Batch-Read-Only, Neon-Batch-Read-Only") {
-		t.Fatalf("native preflight = %d, %q", response.Code, response.Header().Get("Access-Control-Allow-Headers"))
+	if response.Code != http.StatusNoContent || !strings.Contains(allowed, "Neon-Connection-String") || !strings.Contains(allowed, "Neon-Array-Mode") || !strings.Contains(allowed, "Neon-Batch-Read-Only") || !strings.Contains(allowed, "Barnacle-Response-Mode") {
+		t.Fatalf("query preflight = %d, %q", response.Code, allowed)
 	}
 }
 

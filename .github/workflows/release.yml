@@ -61,6 +61,12 @@ jobs:
         run: |
           ./packaging/release/build.sh
           ./packaging/deb/build.sh
+      - name: Scan release binaries
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary dist/barnacle-linux-amd64
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary dist/barnacle-linux-arm64
       - name: Build multi-platform OCI archive with attestations
         run: ./packaging/release/image.sh
       - uses: actions/upload-artifact@v7

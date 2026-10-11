@@ -35,6 +35,8 @@ func ParseTrustedProxies(raw string) ([]netip.Prefix, error) {
 	return prefixes, nil
 }
 
+// ParseAllowedOrigins accepts exact browser origins, including their scheme and
+// port. An origin is a browser access control input, not a user credential.
 func ParseAllowedOrigins(raw string) (map[string]struct{}, error) {
 	if raw == "" {
 		return nil, nil
@@ -86,11 +88,13 @@ func (c Config) Preflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Connection-String, Neon-Connection-String, Array-Mode, Neon-Array-Mode, Raw-Text-Output, Neon-Raw-Text-Output, Batch-Read-Only, Neon-Batch-Read-Only, Batch-Isolation-Level, Neon-Batch-Isolation-Level, Batch-Deferrable, Neon-Batch-Deferrable")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Neon-Connection-String, Neon-Array-Mode, Neon-Raw-Text-Output, Neon-Batch-Read-Only, Neon-Batch-Isolation-Level, Neon-Batch-Deferrable, Barnacle-Response-Mode")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// OriginAllowed protects browser clients from cross-origin requests. Clients
+// without an Origin header are still allowed; PostgreSQL checks their identity.
 func (c Config) OriginAllowed(r *http.Request) bool {
 	origins := r.Header.Values("Origin")
 	if len(origins) == 0 {
@@ -110,6 +114,9 @@ func (c Config) OriginAllowed(r *http.Request) bool {
 	return origin == scheme+"://"+r.Host
 }
 
+// requestScheme uses forwarded scheme information only from the immediate peer
+// configured as trusted. An untrusted peer cannot use X-Forwarded-Proto to
+// make an insecure request appear to have used HTTPS.
 func (c Config) requestScheme(r *http.Request) (string, bool) {
 	scheme := "http"
 	if r.TLS != nil {

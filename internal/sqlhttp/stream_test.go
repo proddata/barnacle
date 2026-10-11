@@ -36,6 +36,21 @@ func TestResponseBudgetStopsBeforeOverLimitWrite(t *testing.T) {
 	}
 }
 
+func TestResponseBudgetAtTwoGiBBoundary(t *testing.T) {
+	const limit = int64(2048) << 20
+	var output bytes.Buffer
+	budget := &responseBudget{writer: &output, max: limit, used: limit - 2}
+	if _, err := budget.Write([]byte("ab")); err != nil {
+		t.Fatal(err)
+	}
+	if budget.used != limit {
+		t.Fatalf("used = %d, want %d", budget.used, limit)
+	}
+	if _, err := budget.Write([]byte("c")); err != errHTTPResultTooLarge {
+		t.Fatalf("write error = %v, want size limit", err)
+	}
+}
+
 func TestRowWithinLimitCountsAllFields(t *testing.T) {
 	values := [][]byte{[]byte("abc"), []byte("def")}
 	if rowWithinLimit(values, 5) || !rowWithinLimit(values, 6) {

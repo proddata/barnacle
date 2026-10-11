@@ -25,13 +25,13 @@ test('Neon HTTP query accepts parameters and returns parsed rows', async () => {
   assert.equal(rows[0].username, new URL(databaseUrl).username);
 });
 
-test('Neon HTTP authToken is forwarded as the PostgreSQL password', async () => {
+
+test('Neon HTTP authToken cannot authenticate with a PostgreSQL password', async () => {
   const url = new URL(databaseUrl);
   const password = decodeURIComponent(url.password);
   url.password = '';
   const sql = neon(url.toString(), { authToken: password });
-  const rows = await sql`select current_user as username`;
-  assert.equal(rows[0].username, url.username);
+  await assert.rejects(sql`select current_user as username`, /502|OAuth/);
 });
 
 test('Neon HTTP transaction returns both results', async () => {
@@ -266,14 +266,15 @@ test('Neon HTTP exposes authentication and SQL error details', async () => {
   }
 });
 
-test('HTTP streams a large response without a content length', async () => {
+test('HTTP streams a response above the buffered limit when requested', async () => {
   const response = await fetch(`${base}/sql`, {
     method: 'POST',
     headers: {
       'Neon-Connection-String': databaseUrl,
+      'Barnacle-Response-Mode': 'streaming',
       'Accept-Encoding': 'identity',
     },
-    body: JSON.stringify({ query: "select repeat('x', 1048576) as payload", params: [] }),
+    body: JSON.stringify({ query: "select repeat('x', 1048576) as payload from generate_series(1, 12)", params: [] }),
   });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-length'), null);
@@ -285,8 +286,42 @@ test('HTTP streams a large response without a content length', async () => {
     chunks.push(next.value);
   }
   const body = JSON.parse(Buffer.concat(chunks).toString());
-  assert.equal(body.rows[0].payload.length, 1048576);
+  assert.equal(body.rows.length, 12);
+  assert.equal(body.rows.reduce((bytes, row) => bytes + row.payload.length, 0), 12 * 1048576);
   assert.ok(chunks.length > 1, `expected multiple response chunks, got ${chunks.length}`);
+});
+
+test('HTTP buffers single queries by default and returns a complete size error', async () => {
+  const response = await fetch(`${base}/sql`, {
+    method: 'POST',
+    headers: { 'Neon-Connection-String': databaseUrl },
+    body: JSON.stringify({ query: "select repeat('x', 1048576) as payload from generate_series(1, 11)", params: [] }),
+  });
+  assert.equal(response.status, 413);
+  assert.equal((await response.json()).code, 'BARNACLE_ERROR');
+});
+
+test('HTTP permits encoded JSON above 10 MiB within the buffered row budget', async () => {
+  const response = await fetch(`${base}/sql`, {
+    method: 'POST',
+    headers: { 'Neon-Connection-String': databaseUrl },
+    body: JSON.stringify({ query: 'select repeat(chr(92), 6 * 1048576) as payload', params: [] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).rows[0].payload.length, 6 * 1048576);
+});
+
+test('HTTP rejects removed unprefixed headers', async () => {
+  const response = await fetch(`${base}/sql`, {
+    method: 'POST',
+    headers: {
+      'Neon-Connection-String': databaseUrl,
+      'Array-Mode': 'true',
+    },
+    body: JSON.stringify({ query: 'select 1', params: [] }),
+  });
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).message, /use Neon-Array-Mode/);
 });
 
 test('HTTP rejects a field above the default row limit', async () => {
@@ -303,7 +338,7 @@ test('HTTP bounds the total buffered batch result', async () => {
   const response = await fetch(`${base}/sql`, {
     method: 'POST',
     headers: { 'Neon-Connection-String': databaseUrl },
-    body: JSON.stringify({ queries: Array.from({ length: 5 }, () => ({
+    body: JSON.stringify({ queries: Array.from({ length: 11 }, () => ({
       query: "select repeat('x', 1048576) as payload", params: [],
     })) }),
   });
@@ -316,7 +351,7 @@ test('HTTP bounds buffered batches with many empty rows', async () => {
     method: 'POST',
     headers: { 'Neon-Connection-String': databaseUrl },
     body: JSON.stringify({ queries: [{
-      query: "select ''::text as payload from generate_series(1, 40000)", params: [],
+      query: "select ''::text as payload from generate_series(1, 90000)", params: [],
     }] }),
   });
   assert.equal(response.status, 413);

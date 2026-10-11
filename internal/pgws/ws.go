@@ -19,6 +19,8 @@ import (
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+// wsWriter serializes data and control frames from separate relay goroutines.
+// Its deadline also stops a slow client from holding a database session forever.
 type wsWriter struct {
 	conn         net.Conn
 	mu           sync.Mutex
@@ -67,6 +69,8 @@ func (w *wsWriter) frame(op byte, data []byte) error {
 	return nil
 }
 
+// Serve resolves and checks the PostgreSQL destination before upgrading. After
+// the 101 response, ordinary HTTP error responses are no longer possible.
 func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	if c.sessions.isDraining() {
 		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
@@ -74,9 +78,6 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !c.OriginAllowed(r) {
 		http.Error(w, "origin denied", http.StatusForbidden)
-		return
-	}
-	if !c.AuthorizeWebSocket(w, r) {
 		return
 	}
 	if r.Header.Get("Upgrade") != "websocket" || !strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") || r.Header.Get("Sec-Websocket-Version") != "13" {
@@ -139,6 +140,8 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	if err = rw.Flush(); err != nil {
 		return
 	}
+	// BackendKeyData arrives during PostgreSQL startup. Keep only its small
+	// cancellation key while forwarding all wire bytes without interpreting SQL.
 	writer := &wsWriter{conn: client, writeTimeout: c.WSWriteTimeout}
 	keyData := &backendKeyCapture{}
 	session := &wsSession{client: client, backend: backend, writer: writer, cancel: func(ctx context.Context) { c.cancelForShutdown(ctx, upstream, keyData) }}
@@ -153,9 +156,12 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	type relayEnd struct {
 		cancel bool
 	}
+	// Either relay can finish first. Close both sockets to wake the other relay,
+	// then wait for it before releasing the connection slot.
 	done := make(chan relayEnd, 2)
 	go func() {
-		defer func() { done <- relayEnd{} }()
+		cancel := false
+		defer func() { done <- relayEnd{cancel: cancel} }()
 		buf := make([]byte, 32<<10)
 		for {
 			n, e := backend.Read(buf)
@@ -166,9 +172,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 				keyData.feed(buf[:n])
 				if writer.frame(2, buf[:n]) != nil {
 					// A slow or vanished client must not keep PostgreSQL busy.
-					if !writer.closing.Load() {
-						c.cancelDisconnectedSession(upstream, keyData)
-					}
+					cancel = true
 					return
 				}
 			}
@@ -178,8 +182,9 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	go func() {
-		err := readWS(rw.Reader, &deadlineWriter{conn: backend, timeout: c.WSWriteTimeout}, writer, client, c.WSIdleTimeout)
-		done <- relayEnd{cancel: err != nil}
+		_ = readWS(rw.Reader, &deadlineWriter{conn: backend, timeout: c.WSWriteTimeout}, writer, client, c.WSIdleTimeout)
+		// A valid close frame also abandons any query still running upstream.
+		done <- relayEnd{cancel: true}
 	}()
 	ended := <-done
 	if ended.cancel && !writer.closing.Load() {
@@ -190,7 +195,8 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	<-done
 }
 
-// readWS streams masked client data into PostgreSQL without buffering whole messages.
+// readWS validates client-to-server framing and streams masked binary data
+// into PostgreSQL in fixed-size chunks. A frame may be much larger than RAM.
 func readWS(reader *bufio.Reader, backend io.Writer, writer *wsWriter, client net.Conn, idleTimeout time.Duration) error {
 	var fragmented bool
 	var buffer [32 << 10]byte
@@ -211,6 +217,8 @@ func readWS(reader *bufio.Reader, backend io.Writer, writer *wsWriter, client ne
 		fin := b1&0x80 != 0
 		op := b1 & 0x0f
 		if b1&0x70 != 0 || b2&0x80 == 0 {
+			// WebSocket clients must mask every frame. Reserved bits require
+			// extensions that this endpoint has not negotiated.
 			return errors.New("invalid websocket frame")
 		}
 		n := uint64(b2 & 0x7f)

@@ -48,6 +48,9 @@ func ParseAllowedPGAddrs(raw string) (map[string]struct{}, error) {
 	return allowed, nil
 }
 
+// UpstreamAddr chooses the sole destination for a connection. With no address
+// allowlist, requests cannot override the configured PGAddr. With an allowlist,
+// a client may select only an explicitly permitted host and port.
 func (c Config) UpstreamAddr(requested string) (string, error) {
 	if len(c.PGAllowedAddrs) == 0 {
 		return c.PGAddr, nil
@@ -75,6 +78,8 @@ func (c Config) UpstreamAddr(requested string) (string, error) {
 	return addr, nil
 }
 
+// HTTPUpstreamAddr reads only the host and port from the client connection
+// string. The caller replaces pgx's parsed host and clears its fallback list.
 func (c Config) HTTPUpstreamAddr(raw string) (string, error) {
 	if len(c.PGAllowedAddrs) == 0 || raw == "" {
 		return c.UpstreamAddr("")
