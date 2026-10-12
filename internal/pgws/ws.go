@@ -74,14 +74,20 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	type relayEnd struct {
 		cancel    bool
 		violation error
+		// upstream is set when PostgreSQL ended the session; err is nil for a
+		// clean EOF.
+		upstream bool
+		err      error
 	}
 	// Either relay can finish first. Close both sockets to wake the other relay,
 	// then wait for it before releasing the connection slot.
 	done := make(chan relayEnd, 2)
 	go func() {
 		cancel := false
-		var violation error
-		defer func() { done <- relayEnd{cancel: cancel, violation: violation} }()
+		var violation, readErr error
+		defer func() {
+			done <- relayEnd{cancel: cancel, violation: violation, upstream: !cancel && violation == nil, err: readErr}
+		}()
 		guard := &loginGuard{allowTrust: c.AllowTrustLogin}
 		failureCounted := false
 		buf := make([]byte, 32<<10)
@@ -112,6 +118,9 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if e != nil {
+				if !errors.Is(e, io.EOF) {
+					readErr = e
+				}
 				return
 			}
 		}
@@ -134,6 +143,16 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		c.Metrics.RejectLogin(reason)
 		slog.Warn("WebSocket login rejected", "reason", reason, "upstream", upstream)
 		_ = ws.Close(websocket.StatusPolicyViolation, "PostgreSQL login was not authenticated")
+	}
+	// Tell the client why the session ended instead of dropping the TCP
+	// connection, which clients see as an abnormal closure (1006). Skip it when
+	// the client ended the session, a shutdown is closing it, or a login was refused.
+	if ended.upstream && !session.closing.Load() {
+		if ended.err == nil {
+			_ = ws.Close(websocket.StatusNormalClosure, "")
+		} else {
+			_ = ws.Close(websocket.StatusInternalError, "upstream connection lost")
+		}
 	}
 	_ = ws.CloseNow()
 	<-done

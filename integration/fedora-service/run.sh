@@ -81,6 +81,55 @@ docker exec "$container" sed -i 's/127.0.0.1:18080/127.0.0.1:8080/' /etc/sysconf
 docker exec "$container" systemctl restart barnacle
 wait_health 8080
 
+# A node agent configures the service without touching the packaged files: a
+# drop-in adds a second settings file, and a few unit lines are overridden.
+# Everything the drop-in does not mention must keep the packaged value.
+docker exec "$container" sh -c '
+    set -eu
+    install -d -m 0755 /etc/barnacle /etc/systemd/system/barnacle.service.d
+    cat > /etc/barnacle/barnacle.env <<EOF
+BARNACLE_LISTEN=127.0.0.1:9682
+BARNACLE_MAX_CONNECTIONS=16
+EOF
+    cat > /etc/systemd/system/barnacle.service.d/10-node-agent.conf <<EOF
+[Service]
+EnvironmentFile=/etc/barnacle/barnacle.env
+MemoryMax=384M
+EOF
+    systemctl daemon-reload
+    systemd-analyze verify barnacle.service
+    systemctl restart barnacle
+'
+wait_health 9682
+if docker exec "$container" curl --silent --fail --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
+    echo 'packaged listen address stayed active after the drop-in settings file overrode it' >&2
+    exit 1
+fi
+docker exec "$container" sh -c '
+    set -eu
+    # The drop-in changed only the lines it names.
+    test "$(systemctl show -P MemoryMax barnacle)" = 402653184
+    # Everything else still comes from the packaged unit.
+    test "$(systemctl show -P MemoryHigh barnacle)" = 201326592
+    test "$(systemctl show -P MemorySwapMax barnacle)" = 0
+    test "$(systemctl show -P Restart barnacle)" = on-failure
+    test "$(systemctl show -P DynamicUser barnacle)" = yes
+    test "$(systemctl show -P NoNewPrivileges barnacle)" = yes
+    test "$(systemctl show -P ProtectSystem barnacle)" = strict
+    # Both settings files are read, and the later one wins for a shared name.
+    case "$(systemctl show -P EnvironmentFiles barnacle)" in
+        *"/etc/sysconfig/barnacle"*"/etc/barnacle/barnacle.env"*) ;;
+        *) exit 1 ;;
+    esac
+'
+docker exec "$container" sh -c '
+    set -eu
+    rm /etc/systemd/system/barnacle.service.d/10-node-agent.conf /etc/barnacle/barnacle.env
+    systemctl daemon-reload
+    systemctl restart barnacle
+'
+wait_health 8080
+
 # The packaged fixed-user drop-in is opt-in. Verify a group-restricted key.
 docker exec "$container" systemctl stop barnacle
 docker exec "$container" sh -c '
@@ -138,4 +187,4 @@ if docker exec "$container" curl --silent --fail --max-time 2 http://127.0.0.1:8
     exit 1
 fi
 
-echo 'Fedora RPM: systemd startup, memory policy, crash restart, config reload, restricted key access, and stop passed'
+echo 'Fedora RPM: systemd startup, memory policy, crash restart, config reload, node-agent drop-in, restricted key access, and stop passed'

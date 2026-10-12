@@ -48,6 +48,10 @@ CI builds, installs, and smoke-tests x86_64 and aarch64 RPMs in Fedora 44 contai
 
 This local test uses a privileged container with its own cgroup namespace. It checks package and unit verification, startup, the effective memory limits, restart after a forced crash, sysconfig changes across a restart, the opt-in key-access variant's group-restricted key access, and clean stop. Use an RPM built for Docker's architecture. A real Fedora host is still needed to check integration with its ingress, PostgreSQL, certificates, and memory pressure. For installation and operation, see the [Fedora service guide](operations.md#fedora-service).
 
+### Packaging for a distribution or vendor
+
+A packager who builds Barnacle in their own pipeline should start from [the RPM spec](../packaging/rpm/barnacle.spec) and the two published source archives, not from a copy of an older release. The fields they normally set are `Epoch`, the `Release` suffix, `Vendor`, and `URL` (pin it to the release tag); everything else, including the Go requirement, the license line and the hardened PIE build, should stay as released. When you move to a newer Barnacle version, take that release's spec again: the license line and `BuildRequires: golang` change between releases (for example when a dependency is added), and a stale copy then misdescribes the package.
+
 ## Test and inspect
 
 With the Compose stack running, test Barnacle with the published Neon driver:
