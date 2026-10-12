@@ -88,6 +88,8 @@ Fix: cost rows by what they allocate (multiply by a measured factor, count array
 Fix: `netutil.LimitListener` (or HAProxy `maxconn`), and in the unit set `StartLimitIntervalSec=0` so the service always comes back.
 
 ### 5. Medium: no access logging, no client IP, no auth-failure signal
+**Status: failed-login counter added** (`barnacle_login_failures_total`, both transports). Access logging and client IP are left to the ingress: behind HAProxy its logs carry the real address, and Barnacle only adds what the ingress cannot see, namely whether PostgreSQL refused the login. The original finding follows.
+
 The only runtime log lines are startup/shutdown and stream interruptions. There is no record of who connected, from where, to which route, or whether login failed, and `/metrics` has no auth-failure counter. PostgreSQL's own log shows only the gateway address. You cannot detect password spraying or reconstruct an incident.
 
 Fix: structured connection log (time, client IP from the immediate peer or a trusted-proxy header, route, outcome incl. SQLSTATE `28P01`/`28000`, duration, bytes). Never log SQL, headers or credentials. Add `auth_failures_total`. Decide how the real client IP reaches Barnacle (`X-Forwarded-For` from `BARNACLE_TRUSTED_PROXIES`, or PROXY protocol).

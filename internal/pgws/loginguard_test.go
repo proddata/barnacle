@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -129,7 +130,7 @@ func TestLoginGuardPassesEverythingAfterReadyForQuery(t *testing.T) {
 }
 
 func TestLoginGuardDisabledForwardsTrustLogin(t *testing.T) {
-	guard := &loginGuard{done: true}
+	guard := &loginGuard{allowTrust: true}
 	out, err := guard.filter(trustLogin)
 	if err != nil || !bytes.Equal(out, trustLogin) {
 		t.Fatalf("disabled guard: %v", err)
@@ -157,4 +158,69 @@ func FuzzLoginGuardChunking(f *testing.F) {
 			t.Fatal("forwarded bytes are not a prefix of the backend stream")
 		}
 	})
+}
+
+func errorResponse(code, message string) []byte {
+	return pgMessage('E', []byte("SFATAL\x00C"+code+"\x00M"+message+"\x00\x00")...)
+}
+
+func TestLoginGuardRecognizesAuthenticationFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wire []byte
+		want bool
+	}{
+		{"wrong password", concat(authRequest(10, []byte("SCRAM-SHA-256\x00\x00")...), errorResponse("28P01", "password authentication failed")), true},
+		{"rejected role or token", concat(authRequest(10, []byte("OAUTHBEARER\x00\x00")...), authRequest(11, []byte(`{"status":"invalid_token"}`)...), errorResponse("28000", "role not permitted")), true},
+		{"wrong md5 password", concat(authRequest(5, 1, 2, 3, 4), errorResponse("28P01", "password authentication failed")), true},
+		{"unknown database", errorResponse("3D000", "database does not exist"), false},
+		{"too many connections", errorResponse("53300", "sorry, too many clients already"), false},
+		{"shutting down", errorResponse("57P03", "the database system is starting up"), false},
+		{"successful login", md5Login, false},
+	} {
+		for _, step := range []int{1, 3, 7, 4096} {
+			guard := &loginGuard{}
+			var forwarded []byte
+			for offset := 0; offset < len(tc.wire); offset += step {
+				out, err := guard.filter(tc.wire[offset:min(offset+step, len(tc.wire))])
+				if err != nil {
+					t.Fatalf("%s step %d: %v", tc.name, step, err)
+				}
+				forwarded = append(forwarded, out...)
+			}
+			if guard.loginFailed != tc.want {
+				t.Errorf("%s step %d: loginFailed = %t, want %t", tc.name, step, guard.loginFailed, tc.want)
+			}
+			if !bytes.Equal(forwarded, tc.wire) {
+				t.Errorf("%s step %d: error message was altered or withheld", tc.name, step)
+			}
+		}
+	}
+}
+
+func TestLoginGuardIgnoresErrorsAfterLogin(t *testing.T) {
+	guard := &loginGuard{}
+	if _, err := guard.filter(md5Login); err != nil {
+		t.Fatal(err)
+	}
+	// A query error after ReadyForQuery is not a failed login, whatever its code.
+	if _, err := guard.filter(errorResponse("28P01", "irrelevant")); err != nil || guard.loginFailed {
+		t.Fatalf("post-login error counted as a failed login (err %v)", err)
+	}
+}
+
+func TestLoginGuardCountsFailuresEvenWhenTrustIsAllowed(t *testing.T) {
+	guard := &loginGuard{allowTrust: true}
+	if _, err := guard.filter(errorResponse("28000", "no pg_hba.conf entry")); err != nil || !guard.loginFailed {
+		t.Fatalf("failure not noticed with trust allowed (err %v)", err)
+	}
+}
+
+func TestLoginGuardLongErrorIsForwardedWithoutBreaking(t *testing.T) {
+	long := pgMessage('E', append([]byte("SFATAL\x00M"+strings.Repeat("x", 10_000)+"\x00C28P01\x00"), 0)...)
+	guard := &loginGuard{}
+	out, err := guard.filter(long)
+	if err != nil || !bytes.Equal(out, long) {
+		t.Fatalf("long error: forwarded %d of %d bytes, %v", len(out), len(long), err)
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,4 +236,58 @@ func TestE2ETrustLoginAllowedWhenConfigured(t *testing.T) {
 	nc, c := dial(t, srv)
 	defer c.CloseNow()
 	readLogin(t, nc, trustLogin)
+}
+
+func loginFailureCount(t *testing.T, h Handler, transport string) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.Metrics.Serve(rec, nil)
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		if strings.HasPrefix(line, `barnacle_login_failures_total{transport="`+transport+`"}`) {
+			return strings.TrimPrefix(line, `barnacle_login_failures_total{transport="`+transport+`"} `)
+		}
+	}
+	t.Fatal("login failure metric missing")
+	return ""
+}
+
+func TestE2EFailedLoginIsCounted(t *testing.T) {
+	failures := map[string][]byte{
+		"wrong password":       concat(authRequest(10, []byte("SCRAM-SHA-256\x00\x00")...), errorResponse("28P01", "password authentication failed")),
+		"unknown database":     errorResponse("3D000", "database does not exist"),
+		"successful md5 login": md5Login,
+	}
+	for name, script := range failures {
+		t.Run(name, func(t *testing.T) {
+			srv, h := startGatewayWith(t, script, false)
+			nc, c := dial(t, srv)
+			defer c.CloseNow()
+			// The client receives the server's reply unchanged.
+			got := make([]byte, len(script))
+			if _, err := io.ReadFull(nc, got); err != nil || !bytes.Equal(got, script) {
+				t.Fatalf("client received %x, %v", got, err)
+			}
+			want := "0"
+			if name == "wrong password" {
+				want = "1"
+			}
+			if count := loginFailureCount(t, h, "websocket"); count != want {
+				t.Fatalf("websocket login failures = %s, want %s", count, want)
+			}
+		})
+	}
+}
+
+func TestE2EFailedLoginCountedOncePerSession(t *testing.T) {
+	script := concat(errorResponse("28P01", "first"), errorResponse("28P01", "second"))
+	srv, h := startGatewayWith(t, script, false)
+	nc, c := dial(t, srv)
+	defer c.CloseNow()
+	got := make([]byte, len(script))
+	if _, err := io.ReadFull(nc, got); err != nil {
+		t.Fatal(err)
+	}
+	if count := loginFailureCount(t, h, "websocket"); count != "1" {
+		t.Fatalf("websocket login failures = %s, want 1", count)
+	}
 }

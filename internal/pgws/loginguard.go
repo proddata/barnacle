@@ -1,6 +1,7 @@
 package pgws
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 )
@@ -8,6 +9,9 @@ import (
 // maxLoginMessageLen only detects a desynchronized stream; messages other than
 // the nine-byte AuthenticationOk-sized 'R' are forwarded without buffering.
 const maxLoginMessageLen = 1 << 20
+
+// Login errors are short; a longer one is forwarded but not inspected.
+const maxLoginErrorBody = 4 << 10
 
 var (
 	errUnauthenticatedLogin = errors.New("PostgreSQL accepted the login without requesting a credential")
@@ -25,15 +29,21 @@ var (
 // back until it has been checked, so a rejected login never reaches the client.
 // A desynchronized stream also fails closed, since otherwise a client could
 // confuse the framing (for example with an SSLRequest) to skip the check.
+//
+// It also notes whether PostgreSQL refused the login with an authentication
+// error (SQLSTATE class 28), so failed logins over WebSocket can be counted.
 type loginGuard struct {
-	done       bool
-	challenged bool
-	header     [5]byte
-	headerN    int
-	code       [4]byte
-	remaining  uint32
-	bodyN      int
-	hold       bool
+	done        bool
+	allowTrust  bool // forward a login PostgreSQL accepts without a credential
+	challenged  bool
+	loginFailed bool
+	errorBody   []byte
+	header      [5]byte
+	headerN     int
+	code        [4]byte
+	remaining   uint32
+	bodyN       int
+	hold        bool
 }
 
 // filter returns the bytes to forward to the client. After an error, the bytes
@@ -58,6 +68,7 @@ func (g *loginGuard) filter(data []byte) ([]byte, error) {
 			g.remaining = length - 4
 			g.bodyN = 0
 			g.code = [4]byte{}
+			g.errorBody = g.errorBody[:0]
 			// An Authentication message of exactly eight bytes may be
 			// AuthenticationOk, so keep it until its type is known.
 			g.hold = g.header[0] == 'R' && length == 8
@@ -70,6 +81,9 @@ func (g *loginGuard) filter(data []byte) ([]byte, error) {
 		if g.header[0] == 'R' && g.bodyN < len(g.code) {
 			copy(g.code[g.bodyN:], body)
 		}
+		if g.header[0] == 'E' && len(g.errorBody)+n <= maxLoginErrorBody {
+			g.errorBody = append(g.errorBody, body...)
+		}
 		if !g.hold {
 			out = append(out, body...)
 		}
@@ -80,13 +94,19 @@ func (g *loginGuard) filter(data []byte) ([]byte, error) {
 			break
 		}
 		g.headerN = 0
+		if g.header[0] == 'E' {
+			if isAuthenticationError(g.errorBody) {
+				g.loginFailed = true
+			}
+			g.errorBody = g.errorBody[:0]
+		}
 		switch g.header[0] {
 		case 'R':
 			if g.bodyN < len(g.code) {
 				return out, errMalformedLogin
 			}
 			if binary.BigEndian.Uint32(g.code[:]) == 0 {
-				if !g.challenged {
+				if !g.challenged && !g.allowTrust {
 					return out, errUnauthenticatedLogin
 				}
 			} else {
@@ -102,4 +122,22 @@ func (g *loginGuard) filter(data []byte) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// isAuthenticationError reports whether an ErrorResponse body carries a
+// SQLSTATE in class 28 (invalid authorization specification, for example 28P01
+// for a wrong password and 28000 for a rejected role or token).
+func isAuthenticationError(body []byte) bool {
+	for len(body) > 1 {
+		field, rest := body[0], body[1:]
+		end := bytes.IndexByte(rest, 0)
+		if end < 0 {
+			return false
+		}
+		if field == 'C' {
+			return bytes.HasPrefix(rest[:end], []byte("28"))
+		}
+		body = rest[end+1:]
+	}
+	return false
 }

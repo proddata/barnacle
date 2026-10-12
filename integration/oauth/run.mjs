@@ -123,6 +123,11 @@ async function websocketOAuth(base, token) {
           const size = Buffer.alloc(4);
           size.writeInt32BE(response.length);
           send('p', Buffer.concat([mechanism, size, response]));
+        } else if (method === 11) {
+          // PostgreSQL reports a rejected token as SASL continue holding a JSON
+          // error. Like a real client, answer with the single 0x01 byte of RFC 7628
+          // so the server finishes with its error response.
+          send('p', Buffer.from([0x01]));
         } else if (method === 0) authenticated = true;
         else throw new Error(`unexpected PostgreSQL authentication method ${method}`);
       }
@@ -328,7 +333,21 @@ try {
   await assert.rejects(driverLogin(port, 'postgres://md5user:wrong@localhost/barnacle'), 'md5 accepted a wrong password');
   assert.equal(await driverLogin(port, `postgres://fallbackuser:${valid}@localhost/barnacle`), 'fallbackuser', 'SCRAM WebSocket login failed');
   await assert.rejects(driverLogin(port, 'postgres://fallbackuser:wrong@localhost/barnacle'), 'SCRAM accepted a wrong password');
-  process.stdout.write('OAuth end-to-end: HTTP and WebSocket OAuth accepted; invalid tokens and roles rejected; bearer password fallback rejected; Basic/SCRAM accepted; WebSocket trust login refused; WebSocket md5 and SCRAM accepted.\n');
+
+  // Logins PostgreSQL refused must show up in the metrics: the ingress cannot see
+  // them over WebSocket, and over HTTP a bad password looks like any other 4xx.
+  const counted = async (transport) => {
+    const body = await (await fetch(`${base}/metrics`)).text();
+    return Number(new RegExp(`barnacle_login_failures_total\\{transport="${transport}"\\} (\\d+)`).exec(body)?.[1]);
+  };
+  // HTTP so far: invalid signature, wrong audience, wrong scope, wrong role.
+  assert.ok(await counted('http') >= 4, `HTTP login failures not counted: ${await counted('http')}`);
+  // WebSocket so far: invalid OAuth token, wrong md5 password, wrong SCRAM password.
+  assert.ok(await counted('websocket') >= 3, `WebSocket login failures not counted: ${await counted('websocket')}`);
+  const httpBefore = await counted('http');
+  assert.equal((await post(valid)).status, 200);
+  assert.equal(await counted('http'), httpBefore, 'a successful login was counted as a failure');
+  process.stdout.write('OAuth end-to-end: HTTP and WebSocket OAuth accepted; invalid tokens and roles rejected; bearer password fallback rejected; Basic/SCRAM accepted; WebSocket trust login refused; WebSocket md5 and SCRAM accepted; failed logins counted.\n');
 } catch (error) {
   try { await run('docker', [...composeArgs, 'logs', '--no-color'], { env }); } catch { /* Preserve the test failure. */ }
   throw error;

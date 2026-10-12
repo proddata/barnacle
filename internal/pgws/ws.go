@@ -82,7 +82,8 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		cancel := false
 		var violation error
 		defer func() { done <- relayEnd{cancel: cancel, violation: violation} }()
-		guard := &loginGuard{done: c.AllowTrustLogin}
+		guard := &loginGuard{allowTrust: c.AllowTrustLogin}
+		failureCounted := false
 		buf := make([]byte, 32<<10)
 		for {
 			n, e := backend.Read(buf)
@@ -92,6 +93,12 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 				}
 				keyData.feed(buf[:n])
 				forward, guardErr := guard.filter(buf[:n])
+				// Count before forwarding, so the client never sees a refusal that the
+				// metric has not recorded yet.
+				if guard.loginFailed && !failureCounted {
+					failureCounted = true
+					c.Metrics.LoginFailure("websocket")
+				}
 				if len(forward) > 0 {
 					if _, err := (&deadlineWriter{conn: client, timeout: c.WSWriteTimeout}).Write(forward); err != nil {
 						// A slow or vanished client must not keep PostgreSQL busy.

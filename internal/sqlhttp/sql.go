@@ -396,7 +396,11 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	conn, err := pgx.ConnectConfig(connectCtx, pgcfg)
 	connectCancel()
 	if err != nil {
-		c.Metrics.UpstreamFailure()
+		if isLoginFailure(err) {
+			c.Metrics.LoginFailure("http")
+		} else {
+			c.Metrics.UpstreamFailure()
+		}
 		dbConnectError(w, err, pgcfg.RequireAuth == "oauth" && pgcfg.OAuthTokenProvider != nil)
 		return
 	}
@@ -717,6 +721,19 @@ func fieldsFromDescriptions(descriptions []pgconn.FieldDescription) []field {
 		fields[i] = field{Name: d.Name, TableID: d.TableOID, ColumnID: d.TableAttributeNumber, DataTypeID: d.DataTypeOID, DataTypeSize: d.DataTypeSize, DataTypeModifier: d.TypeModifier, Format: "text"}
 	}
 	return fields
+}
+
+// isLoginFailure reports whether PostgreSQL refused the credentials: an error in
+// SQLSTATE class 28, or a rejected OAuth token (which pgx does not report as a
+// PostgreSQL error). A server that merely lacks the requested authentication
+// method is a configuration problem, not a failed login.
+func isLoginFailure(err error) bool {
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) {
+		return strings.HasPrefix(pgerr.Code, "28")
+	}
+	var connectErr *pgconn.ConnectError
+	return errors.As(err, &connectErr) && strings.Contains(connectErr.Error(), "OAuth authentication failed:")
 }
 
 func dbConnectError(w http.ResponseWriter, err error, requireOAuth bool) {
