@@ -68,7 +68,7 @@ Also adjust `GOMEMLIMIT` in `/etc/sysconfig/barnacle` when changing `MemoryMax`,
 
 ## Validating configuration
 
-`barnacle -check-config` reads the same `BARNACLE_*` environment as the service, validates every setting (including certificate and CA files), prints `configuration ok` and exits 0 without opening a listener. On invalid input it logs every problem at once and exits 1. A platform that generates the environment can run it in a test or as a unit `ExecStartPre=` to catch a bad setting before a restart. Unknown `BARNACLE_*` names are not rejected.
+`barnacle -check-config` reads the same `BARNACLE_*` environment as the service, validates every setting (including certificate and CA files), prints `configuration ok` and exits 0 without opening a listener. On invalid input it logs every problem at once and exits 1. A platform that generates the environment can run it in a test or as a unit `ExecStartPre=` to catch a bad setting before a restart. By default an unrecognized `BARNACLE_*` name is ignored, so a typo leaves the default in place. Add `-strict` (to `-check-config` or to the service itself) to fail on any `BARNACLE_*` variable the server does not read. Only use it where the environment is dedicated to Barnacle, because tooling variables such as `BARNACLE_BASE_URL` in the integration scripts would also be rejected.
 
 ## Migrating an installed Hermit service
 

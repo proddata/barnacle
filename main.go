@@ -26,8 +26,9 @@ import (
 
 func main() {
 	checkConfig := flag.Bool("check-config", false, "validate the BARNACLE_* environment and exit without listening")
+	strict := flag.Bool("strict", false, "treat unknown BARNACLE_* environment variables as errors")
 	flag.Parse()
-	s, err := loadSettings(os.Getenv)
+	s, err := loadSettings(os.Getenv, os.Environ(), *strict)
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)

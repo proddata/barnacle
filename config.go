@@ -34,6 +34,7 @@ type settings struct {
 // in one run instead of fixing them one restart at a time.
 type envReader struct {
 	getenv func(string) string
+	read   map[string]bool
 	errs   []error
 }
 
@@ -106,8 +107,17 @@ func (r *envReader) check(key string, err error) {
 	}
 }
 
-func loadSettings(getenv func(string) string) (*settings, error) {
-	r := &envReader{getenv: getenv}
+// loadSettings builds the settings from getenv. With strict set, environ (in
+// os.Environ form) is also scanned and any BARNACLE_* name the server never
+// reads is an error, which catches typos that would otherwise leave a default
+// in place.
+func loadSettings(lookup func(string) string, environ []string, strict bool) (*settings, error) {
+	read := map[string]bool{}
+	getenv := func(key string) string {
+		read[key] = true
+		return lookup(key)
+	}
+	r := &envReader{getenv: getenv, read: read}
 	s := &settings{}
 
 	timeout := r.duration("BARNACLE_QUERY_TIMEOUT", "10m", 1)
@@ -182,10 +192,6 @@ func loadSettings(getenv func(string) string) (*settings, error) {
 		r.failf("invalid public TLS configuration: %w", err)
 	}
 
-	if len(r.errs) > 0 {
-		return nil, errors.Join(r.errs...)
-	}
-
 	// These channels bound concurrent database work across both transports.
 	// Cancellation uses a separate, smaller budget because it opens a new
 	// PostgreSQL connection to stop abandoned WebSocket queries.
@@ -215,6 +221,25 @@ func loadSettings(getenv func(string) string) (*settings, error) {
 		MaxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
 		HTTPMemory:           gateway.NewMemoryBudget(s.httpMemoryBytes),
 		Metrics:              &gateway.Metrics{},
+	}
+
+	// Strict runs last so every setting above has been read.
+	if strict {
+		var unknown []string
+		for _, entry := range environ {
+			name, _, _ := strings.Cut(entry, "=")
+			if strings.HasPrefix(name, "BARNACLE_") && !read[name] {
+				unknown = append(unknown, name)
+			}
+		}
+		slices.Sort(unknown)
+		for _, name := range slices.Compact(unknown) {
+			r.failf("unknown setting %s", name)
+		}
+	}
+
+	if len(r.errs) > 0 {
+		return nil, errors.Join(r.errs...)
 	}
 	return s, nil
 }

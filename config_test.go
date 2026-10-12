@@ -10,7 +10,7 @@ func envMap(pairs map[string]string) func(string) string {
 }
 
 func TestLoadSettingsDefaults(t *testing.T) {
-	s, err := loadSettings(envMap(nil))
+	s, err := loadSettings(envMap(nil), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestLoadSettingsManagedNodeEnvironment(t *testing.T) {
 		"BARNACLE_MAX_CONNECTIONS": "32",
 		"BARNACLE_PG_ADDR":         "127.0.0.1:5432",
 		"BARNACLE_PG_SSLMODE":      "disable",
-	}))
+	}), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestLoadSettingsReportsEveryProblem(t *testing.T) {
 		"BARNACLE_WS_ALLOW_TRUST_AUTH": "yes",
 		"BARNACLE_METRICS":             "maybe",
 		"BARNACLE_PG_ADDR":             "not-an-address",
-	}))
+	}), nil, false)
 	if err == nil {
 		t.Fatal("invalid environment accepted")
 	}
@@ -75,7 +75,7 @@ func TestLoadSettingsRejections(t *testing.T) {
 		"missing CA file":                {"BARNACLE_PG_CA_FILE": "/nonexistent/ca.pem"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := loadSettings(envMap(env)); err == nil {
+			if _, err := loadSettings(envMap(env), nil, false); err == nil {
 				t.Fatal("invalid environment accepted")
 			}
 		})
@@ -83,11 +83,50 @@ func TestLoadSettingsRejections(t *testing.T) {
 }
 
 func TestLoadSettingsAcceptsBooleanCase(t *testing.T) {
-	s, err := loadSettings(envMap(map[string]string{"BARNACLE_WS_ALLOW_TRUST_AUTH": "TRUE", "BARNACLE_METRICS": "False"}))
+	s, err := loadSettings(envMap(map[string]string{"BARNACLE_WS_ALLOW_TRUST_AUTH": "TRUE", "BARNACLE_METRICS": "False"}), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !s.cfg.AllowTrustLogin || s.metricsEnabled {
 		t.Fatal("boolean values not applied")
+	}
+}
+
+func TestLoadSettingsStrictRejectsUnknownNames(t *testing.T) {
+	values := map[string]string{"BARNACLE_PG_SSLMODE": "disable"}
+	environ := []string{"PATH=/usr/bin", "BARNACLE_PG_SSLMODE=disable", "BARNACLE_PG_SSLMDOE=disable", "BARNACLE_LISTNE=:1"}
+
+	if _, err := loadSettings(envMap(values), environ, false); err != nil {
+		t.Fatalf("lenient mode rejected unknown names: %v", err)
+	}
+	_, err := loadSettings(envMap(values), environ, true)
+	if err == nil {
+		t.Fatal("strict mode accepted unknown names")
+	}
+	for _, want := range []string{"BARNACLE_PG_SSLMDOE", "BARNACLE_LISTNE"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %s: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "BARNACLE_PG_SSLMODE") || strings.Contains(err.Error(), "PATH") {
+		t.Errorf("error names a known or foreign variable: %v", err)
+	}
+}
+
+// Every documented setting must count as known, including ones only read on
+// optional paths.
+func TestStrictKnowsEveryDocumentedSetting(t *testing.T) {
+	var environ []string
+	for _, name := range []string{
+		"BARNACLE_LISTEN", "BARNACLE_PG_ADDR", "BARNACLE_READY_PG_ADDR", "BARNACLE_PG_ALLOWED_ADDRS",
+		"BARNACLE_PG_SSLMODE", "BARNACLE_PG_QUERY_EXEC_MODE", "BARNACLE_PG_CA_FILE", "BARNACLE_PG_EXTRA_CA_FILE",
+		"BARNACLE_PG_TLS_SERVER_NAME", "BARNACLE_ALLOWED_ORIGIN", "BARNACLE_TRUSTED_PROXIES",
+		"BARNACLE_WS_ALLOW_TRUST_AUTH", "BARNACLE_METRICS", "BARNACLE_METRICS_LISTEN",
+		"BARNACLE_TLS_CERT_FILE", "BARNACLE_TLS_KEY_FILE", "BARNACLE_HTTP_MAX_MEMORY_MIB",
+	} {
+		environ = append(environ, name+"=")
+	}
+	if _, err := loadSettings(envMap(nil), environ, true); err != nil {
+		t.Fatal(err)
 	}
 }
