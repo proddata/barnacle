@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { neon, neonConfig } from '@neondatabase/serverless';
+import { Client, neon, neonConfig } from '@neondatabase/serverless';
 import WebSocket from 'ws';
 
 const compose = fileURLToPath(new URL('compose.yaml', import.meta.url));
@@ -147,6 +147,55 @@ async function websocketOAuth(base, token) {
   }
 }
 
+// Sends a PostgreSQL startup packet with no credential and records what the
+// gateway lets through. A trust rule must not reach the client as a login.
+async function websocketTrustLogin(base, user) {
+  const socket = new WebSocket(`${base.replace(/^http/, 'ws')}/v2`);
+  const types = [];
+  let bytes = Buffer.alloc(0);
+  let authenticationOk = false;
+  socket.on('error', () => {});
+  socket.on('message', (chunk) => {
+    bytes = Buffer.concat([bytes, Buffer.from(chunk)]);
+    while (bytes.length >= 5) {
+      const length = bytes.readInt32BE(1);
+      if (bytes.length < length + 1) break;
+      types.push(String.fromCharCode(bytes[0]));
+      if (bytes[0] === 0x52 && bytes.readInt32BE(5) === 0) authenticationOk = true;
+      bytes = bytes.subarray(length + 1);
+    }
+  });
+  const closed = new Promise((resolve) => {
+    socket.on('close', (code) => resolve(code));
+    setTimeout(() => resolve(undefined), 5000);
+  });
+  await new Promise((resolve, reject) => {
+    socket.once('open', resolve);
+    socket.once('error', reject);
+  });
+  const parameters = Buffer.from(`user\0${user}\0database\0barnacle\0\0`);
+  const startup = Buffer.alloc(8 + parameters.length);
+  startup.writeInt32BE(startup.length, 0);
+  startup.writeInt32BE(196608, 4);
+  parameters.copy(startup, 8);
+  socket.send(startup);
+  const code = await closed;
+  socket.terminate();
+  return { code, authenticationOk, types };
+}
+
+// Logs in through the Neon driver's WebSocket Client, which handles the
+// password exchange itself, and returns the current role.
+async function driverLogin(port, connectionString) {
+  neonConfig.webSocketConstructor = WebSocket;
+  neonConfig.useSecureWebSocket = false;
+  neonConfig.wsProxy = () => `127.0.0.1:${port}/v2`;
+  neonConfig.pipelineConnect = false;
+  const client = new Client(connectionString);
+  await client.connect();
+  try { return (await client.query('select current_user as username')).rows[0].username; } finally { await client.end(); }
+}
+
 const fixture = await mkdtemp(join(tmpdir(), 'barnacle-oauth-'));
 // The PostgreSQL container must traverse this host directory to read pg_hba.conf.
 await chmod(fixture, 0o711);
@@ -189,12 +238,13 @@ try {
     ...jwk, kid: 'barnacle-test-key', use: 'sig', alg: 'RS256',
   }] }));
   await writeFile(join(fixture, 'init.sql'),
-    `CREATE ROLE appuser LOGIN;\nCREATE ROLE otheruser LOGIN;\nCREATE ROLE fallbackuser LOGIN PASSWORD '${valid}';\nCREATE ROLE trustuser LOGIN;\n`);
+    `CREATE ROLE appuser LOGIN;\nCREATE ROLE otheruser LOGIN;\nCREATE ROLE fallbackuser LOGIN PASSWORD '${valid}';\nCREATE ROLE trustuser LOGIN;\nSET password_encryption = 'md5';\nCREATE ROLE md5user LOGIN PASSWORD 'md5_test_password';\n`);
   await writeFile(join(fixture, 'pg_hba.conf'), [
     'local all all trust',
     `host all appuser,otheruser 0.0.0.0/0 oauth issuer=${issuer} scope="connect:postgres" validator=pg_oauth_validator`,
     'host all fallbackuser 0.0.0.0/0 scram-sha-256',
     'host all trustuser 0.0.0.0/0 trust',
+    'host all md5user 0.0.0.0/0 md5',
     '',
   ].join('\n'));
 
@@ -264,7 +314,21 @@ try {
   });
   assert.equal(trust.status, 502, `password request bypassed authentication through trust: ${await trust.text()}`);
   assert.equal((await post(valid)).status, 200, 'valid token failed after rejection cases');
-  process.stdout.write('OAuth end-to-end: HTTP and WebSocket OAuth accepted; invalid tokens and roles rejected; bearer password fallback rejected; Basic/SCRAM accepted.\n');
+
+  // WebSocket sessions are a byte relay, so the gateway itself must refuse a
+  // login PostgreSQL accepts without asking for a credential.
+  const wsTrust = await websocketTrustLogin(base, 'trustuser');
+  assert.equal(wsTrust.authenticationOk, false, `WebSocket client received AuthenticationOk from a trust rule: ${wsTrust.types}`);
+  assert.ok(!wsTrust.types.includes('Z'), `WebSocket client received ReadyForQuery from a trust rule: ${wsTrust.types}`);
+  assert.equal(wsTrust.code, 1008, `trust login was not closed as a policy violation: ${JSON.stringify(wsTrust)}`);
+  const metrics = await (await fetch(`${base}/metrics`)).text();
+  assert.match(metrics, /barnacle_websocket_login_rejections_total\{reason="unauthenticated"\} [1-9]/);
+  // Password methods that do request a credential must keep working over WebSocket.
+  assert.equal(await driverLogin(port, `postgres://md5user:md5_test_password@localhost/barnacle`), 'md5user', 'md5 WebSocket login failed');
+  await assert.rejects(driverLogin(port, 'postgres://md5user:wrong@localhost/barnacle'), 'md5 accepted a wrong password');
+  assert.equal(await driverLogin(port, `postgres://fallbackuser:${valid}@localhost/barnacle`), 'fallbackuser', 'SCRAM WebSocket login failed');
+  await assert.rejects(driverLogin(port, 'postgres://fallbackuser:wrong@localhost/barnacle'), 'SCRAM accepted a wrong password');
+  process.stdout.write('OAuth end-to-end: HTTP and WebSocket OAuth accepted; invalid tokens and roles rejected; bearer password fallback rejected; Basic/SCRAM accepted; WebSocket trust login refused; WebSocket md5 and SCRAM accepted.\n');
 } catch (error) {
   try { await run('docker', [...composeArgs, 'logs', '--no-color'], { env }); } catch { /* Preserve the test failure. */ }
   throw error;

@@ -143,6 +143,7 @@ The development Compose file passes these settings from shell variables or `.env
 | `BARNACLE_METRICS_LISTEN` | empty | Optional separate metrics `host:port`; empty serves `/metrics` on `BARNACLE_LISTEN` |
 | `BARNACLE_WS_IDLE_TIMEOUT` | `30m` | Close after this long without client frames or PostgreSQL output |
 | `BARNACLE_WS_WRITE_TIMEOUT` | `30s` | Deadline for each WebSocket or upstream write |
+| `BARNACLE_WS_ALLOW_TRUST_AUTH` | `false` | `true` lets a WebSocket login succeed when PostgreSQL accepts it without requesting a credential (`trust`); by default such sessions are closed with code 1008 |
 | `BARNACLE_MAX_CONNECTIONS` | `32` | Maximum simultaneous HTTP and WebSocket upstream connections; excess gets 503 |
 | `BARNACLE_MAX_HTTP_QUERIES` | `8` | Maximum concurrent `/sql` requests, including body reading; excess gets 503 |
 | `BARNACLE_HTTP_MAX_REQUEST_MIB` | `10` | Maximum `/sql` JSON request body in MiB |

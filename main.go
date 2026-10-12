@@ -115,6 +115,7 @@ func main() {
 		PGAllowedAddrs:       allowedAddrs,
 		PGSSLMode:            pgSSLMode,
 		PGQueryExecMode:      pgQueryExecMode,
+		AllowTrustLogin:      boolEnv("BARNACLE_WS_ALLOW_TRUST_AUTH", false),
 		PGTLSServerName:      os.Getenv("BARNACLE_PG_TLS_SERVER_NAME"),
 		PGRootCAs:            pgRootCAs,
 		AllowedOrigins:       allowedOrigins,
@@ -351,6 +352,21 @@ func durationEnv(key, fallback string, min time.Duration) time.Duration {
 		exitf("invalid " + key)
 	}
 	return value
+}
+
+// boolEnv accepts only true or false so a typo cannot silently relax a policy.
+func boolEnv(key string, fallback bool) bool {
+	switch value := strings.ToLower(os.Getenv(key)); value {
+	case "":
+		return fallback
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		exitf(key + " must be true or false")
+		return fallback
+	}
 }
 
 func choiceEnv(key, fallback string, choices ...string) string {

@@ -22,6 +22,10 @@ type Config struct {
 	UpstreamSlots, CancelSlots, HTTPSlots, ReadySlots                                chan struct{}
 	MaxHTTPRequestBytes, MaxHTTPRowBytes, MaxHTTPBufferedBytes, MaxHTTPResponseBytes int64
 	Metrics                                                                          *Metrics
+
+	// AllowTrustLogin lets a WebSocket session proceed when PostgreSQL accepts
+	// the login without asking for a credential.
+	AllowTrustLogin bool
 }
 
 // AcquireUpstream reserves one database connection without waiting. Refusing

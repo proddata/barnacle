@@ -2,7 +2,9 @@ package pgws
 
 import (
 	"context"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -70,14 +72,17 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		defer c.Metrics.CloseWebSocket()
 	}
 	type relayEnd struct {
-		cancel bool
+		cancel    bool
+		violation error
 	}
 	// Either relay can finish first. Close both sockets to wake the other relay,
 	// then wait for it before releasing the connection slot.
 	done := make(chan relayEnd, 2)
 	go func() {
 		cancel := false
-		defer func() { done <- relayEnd{cancel: cancel} }()
+		var violation error
+		defer func() { done <- relayEnd{cancel: cancel, violation: violation} }()
+		guard := &loginGuard{done: c.AllowTrustLogin}
 		buf := make([]byte, 32<<10)
 		for {
 			n, e := backend.Read(buf)
@@ -86,9 +91,16 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 					_ = client.SetReadDeadline(time.Now().Add(c.WSIdleTimeout))
 				}
 				keyData.feed(buf[:n])
-				if _, err := (&deadlineWriter{conn: client, timeout: c.WSWriteTimeout}).Write(buf[:n]); err != nil {
-					// A slow or vanished client must not keep PostgreSQL busy.
-					cancel = !session.closing.Load()
+				forward, guardErr := guard.filter(buf[:n])
+				if len(forward) > 0 {
+					if _, err := (&deadlineWriter{conn: client, timeout: c.WSWriteTimeout}).Write(forward); err != nil {
+						// A slow or vanished client must not keep PostgreSQL busy.
+						cancel = !session.closing.Load()
+						return
+					}
+				}
+				if guardErr != nil {
+					violation = guardErr
 					return
 				}
 			}
@@ -106,8 +118,17 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	if ended.cancel && !session.closing.Load() {
 		c.cancelDisconnectedSession(upstream, keyData)
 	}
-	_ = ws.CloseNow()
 	_ = backend.Close()
+	if ended.violation != nil {
+		reason := "malformed"
+		if errors.Is(ended.violation, errUnauthenticatedLogin) {
+			reason = "unauthenticated"
+		}
+		c.Metrics.RejectLogin(reason)
+		slog.Warn("WebSocket login rejected", "reason", reason, "upstream", upstream)
+		_ = ws.Close(websocket.StatusPolicyViolation, "PostgreSQL login was not authenticated")
+	}
+	_ = ws.CloseNow()
 	<-done
 }
 

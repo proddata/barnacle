@@ -20,6 +20,7 @@ type Metrics struct {
 	upstreamRejects      uint64
 	upstreamFailures     uint64
 	streamInterruptions  [4]uint64
+	loginRejections      [2]uint64
 }
 
 func (m *Metrics) OpenWebSocket() {
@@ -69,6 +70,20 @@ func (m *Metrics) InterruptHTTPStream(kind string) {
 	}
 	m.mu.Lock()
 	m.streamInterruptions[index]++
+	m.mu.Unlock()
+}
+
+// RejectLogin counts a WebSocket session closed before login completed.
+func (m *Metrics) RejectLogin(reason string) {
+	if m == nil {
+		return
+	}
+	index := 1 // Unknown reasons stay in the fixed malformed series.
+	if reason == "unauthenticated" {
+		index = 0
+	}
+	m.mu.Lock()
+	m.loginRejections[index]++
 	m.mu.Unlock()
 }
 
@@ -143,6 +158,7 @@ func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	upstreamRejects := m.upstreamRejects
 	upstreamFailures := m.upstreamFailures
 	streamInterruptions := m.streamInterruptions
+	loginRejections := m.loginRejections
 	m.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_websocket_active Currently open WebSocket connections.\n# TYPE barnacle_websocket_active gauge\nbarnacle_websocket_active %d\n", websocketActive)
@@ -152,6 +168,7 @@ func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_sql_errors_total HTTP SQL responses with status 400 or higher.\n# TYPE barnacle_sql_errors_total counter\nbarnacle_sql_errors_total %d\n", sqlErrors)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_limit_rejections_total Requests rejected by a configured concurrency limit.\n# TYPE barnacle_limit_rejections_total counter\nbarnacle_limit_rejections_total{limit=\"http_queries\"} %d\nbarnacle_limit_rejections_total{limit=\"upstream_connections\"} %d\n", httpLimitRejects, upstreamRejects)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_upstream_connection_failures_total Failed PostgreSQL connection attempts.\n# TYPE barnacle_upstream_connection_failures_total counter\nbarnacle_upstream_connection_failures_total %d\n", upstreamFailures)
+	_, _ = fmt.Fprintf(w, "# HELP barnacle_websocket_login_rejections_total WebSocket sessions closed before PostgreSQL login completed.\n# TYPE barnacle_websocket_login_rejections_total counter\nbarnacle_websocket_login_rejections_total{reason=\"unauthenticated\"} %d\nbarnacle_websocket_login_rejections_total{reason=\"malformed\"} %d\n", loginRejections[0], loginRejections[1])
 	_, _ = fmt.Fprintln(w, "# HELP barnacle_sql_stream_interruptions_total HTTP SQL result streams interrupted after streaming began.\n# TYPE barnacle_sql_stream_interruptions_total counter")
 	for i, kind := range [...]string{"result_limit", "canceled", "timeout", "query_or_transport"} {
 		_, _ = fmt.Fprintf(w, "barnacle_sql_stream_interruptions_total{kind=%q} %d\n", kind, streamInterruptions[i])
