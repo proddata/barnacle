@@ -28,8 +28,9 @@ updates:
       actions:
         patterns: ["*"]
 
-  # Base images that track a CI matrix are bumped by hand together with it:
-  # postgres (ci.yml matrix, compose.yaml), fedora (RPM matrix), node (console build).
+  # Base images that track a CI matrix or the Go version are bumped by hand
+  # together with it: postgres (ci.yml matrix, compose.yaml), fedora (RPM
+  # matrix), node (console build), golang (go.mod and the RPM spec).
   - package-ecosystem: docker
     directories:
       - /
@@ -38,7 +39,14 @@ updates:
       - /integration/pgbouncer
       - /integration/fedora-service
     schedule: { interval: weekly, day: monday }
+    groups:
+      # One PR per image, covering every Dockerfile that uses it.
+      docker-images:
+        patterns: ["*"]
+        group-by: dependency-name
     ignore:
+      - dependency-name: golang
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: fedora
         update-types: ["version-update:semver-major"]
       - dependency-name: node
