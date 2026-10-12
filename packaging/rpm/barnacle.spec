@@ -1,5 +1,5 @@
 Name:           barnacle
-Version:        0.2.0
+Version:        0.2.1
 Release:        1%{?dist}
 %global debug_package %{nil}
 Summary:        HTTP and WebSocket proxy for PostgreSQL
@@ -58,6 +58,10 @@ done
 %config(noreplace) %{_sysconfdir}/sysconfig/barnacle
 
 %changelog
+* Mon Oct 12 2026 Barnacle contributors - 0.2.1-1
+- Republish 0.2.0 as 0.2.1: the 0.2.0 release was withdrawn and its tag cannot be reused
+- No functional changes from 0.2.0
+
 * Mon Oct 12 2026 Barnacle contributors - 0.2.0-1
 - Add -check-config and -strict to validate the BARNACLE_* environment
 - Send a WebSocket close frame when PostgreSQL ends a session
