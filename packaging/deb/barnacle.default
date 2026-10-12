@@ -8,3 +8,7 @@ BARNACLE_PG_SSLMODE=require
 # BARNACLE_PG_CA_FILE=/etc/barnacle/pg-ca.pem
 # BARNACLE_METRICS=false
 # BARNACLE_METRICS_LISTEN=127.0.0.1:9090
+# Heap budget for /sql request bodies and buffered results. Unset, it is GOMEMLIMIT
+# less 64 MiB (96 MiB for this unit), so raise MemoryMax and GOMEMLIMIT together
+# and leave this alone.
+# BARNACLE_HTTP_MAX_MEMORY_MIB=96

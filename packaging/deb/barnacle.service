@@ -2,8 +2,9 @@
 Description=Barnacle PostgreSQL HTTP and WebSocket proxy
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=60s
-StartLimitBurst=5
+# Always come back after a crash or OOM kill; alert on NRestarts instead of
+# letting systemd give up after a burst of failures.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
