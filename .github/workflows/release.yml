@@ -95,7 +95,7 @@ jobs:
     steps:
       - run: dnf install -y golang git python3 rpm-build systemd-rpm-macros tar gzip
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: release-sources
           path: dist
@@ -121,7 +121,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: dist
