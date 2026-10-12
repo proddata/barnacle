@@ -1,4 +1,4 @@
-FROM alpine:3.21
+FROM alpine:3.24
 RUN apk add --no-cache pgbouncer su-exec \
     && addgroup -S pgbouncer \
     && adduser -S -G pgbouncer pgbouncer
