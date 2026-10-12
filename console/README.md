@@ -18,6 +18,17 @@ Add, rename, save, and switch connections from the connection bar. Host, databas
 
 With HTTP selected, **One transaction** sends up to 100 statements in a single `sql.transaction()` request and displays the results together after completion. Keep explicit `BEGIN`, `COMMIT`, and `ROLLBACK` out of an HTTP batch when you need ordinary all-or-nothing behavior. Without that option, HTTP queries are independent requests.
 
+**Max rows** (HTTP only) sends `Barnacle-Max-Rows`, so Barnacle returns at most that many rows per query. The result summary shows the full row count and marks the result as limited. The query still runs to completion on PostgreSQL, so use SQL `LIMIT` to reduce its work. **Cancel** appears next to **Run** while a statement is running. Over HTTP it aborts the request through an `AbortSignal`, Barnacle cancels the PostgreSQL query, and a transaction batch is rolled back. Over WebSocket it closes the session, which also cancels the query but ends any open transaction. In your own code the HTTP equivalent is:
+
+```js
+const controller = new AbortController();
+const sql = neon(url);
+const pending = sql.query('select pg_sleep(60)', [], { fetchOptions: { signal: controller.signal } });
+controller.abort(); // rejects `pending`; Barnacle cancels the query
+```
+
+The Examples menu has **Cancel a slow query** and **Limit result size** for trying both.
+
 With WebSocket selected, queries in one editor tab share a PostgreSQL session. Use **Connect** and **Disconnect** to manage it, or run SQL to connect automatically. Closing the tab or changing its connection settings closes the session. The Examples menu includes server information, a delayed transaction, and a failed-transaction recovery sequence.
 
 ## Authentication and routing

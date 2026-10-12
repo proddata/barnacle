@@ -150,3 +150,8 @@
 .detail-meta { margin-bottom: 3px; }
 .detail-endpoint { color: #68848e; font-size: 10px; overflow-wrap: anywhere; margin: 0 0 16px; }
 @media(max-width:760px) { .connection-panel { padding: 4px 10px 6px; } .connection-overview { gap: 6px; } .connection-overview #connection-method-summary { display: none; } .development-warning { padding: 5px 10px; } .workbench.mobile-explorer #explorer-panel, .workbench.mobile-debug #debug-panel { top: 128px; } }
+
+.cancel-button { border: 1px solid #d98b7b; background: transparent; color: #f1a79b; border-radius: 6px; padding: 8px 12px; font-weight: 700; white-space: nowrap; }
+.cancel-button:hover { background: #3a2622; color: #ffd2c9; }
+.cancel-button:disabled { opacity: .5; cursor: wait; }
+.trace-item .trace-status.cancelled { color: #e2bc77; }
