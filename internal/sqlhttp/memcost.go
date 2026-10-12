@@ -107,7 +107,7 @@ func streamRowCost(values [][]byte, kinds []cellKind) int64 {
 		if v == nil || nestedKind(kinds[i], v) != kindArray {
 			continue
 		}
-		cost += 5*int64(len(v)) + 110*(int64(bytes.Count(v, []byte{','}))+1)
+		cost += 5*int64(len(v)) + 130*(int64(bytes.Count(v, []byte{','}))+1)
 	}
 	return cost
 }
