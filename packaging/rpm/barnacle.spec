@@ -1,5 +1,5 @@
 Name:           barnacle
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 %global debug_package %{nil}
 Summary:        HTTP and WebSocket proxy for PostgreSQL
@@ -58,5 +58,12 @@ done
 %config(noreplace) %{_sysconfdir}/sysconfig/barnacle
 
 %changelog
+* Mon Oct 12 2026 Barnacle contributors - 0.2.0-1
+- Add -check-config and -strict to validate the BARNACLE_* environment
+- Send a WebSocket close frame when PostgreSQL ends a session
+- Build the package as a position-independent executable
+- Add maxRows to cap rows returned by buffered /sql queries
+- Document configuring the packaged service with a drop-in
+
 * Thu Oct 01 2026 Barnacle contributors - 0.1.0-1
 - Initial RPM package

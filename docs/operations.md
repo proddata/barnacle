@@ -7,7 +7,7 @@ For upstream routing, TLS, and production checks, start with the [deployment gui
 Install the `.deb` for your architecture from CI or [build it locally](development.md#release-binaries-container-and-debian-package), then edit `/etc/default/barnacle` and enable the service:
 
 ```sh
-sudo apt install ./dist/barnacle_0.1.0_amd64.deb # example for amd64
+sudo apt install ./dist/barnacle_0.2.0_amd64.deb # example for amd64
 sudoedit /etc/default/barnacle
 sudo systemctl enable --now barnacle
 ```
