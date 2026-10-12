@@ -206,11 +206,10 @@ jobs:
     name: Fedora ${{ matrix.fedora }} RPM (${{ matrix.arch }})
     strategy:
       fail-fast: false
-      # Newest Fedora release and the previous one.
+      # The spec needs golang >= 1.26.9, which Fedora 43 does not ship. Add
+      # the previous release again once it does.
       matrix:
         include:
-          - { fedora: '43', arch: x86_64, runner: ubuntu-24.04 }
-          - { fedora: '43', arch: aarch64, runner: ubuntu-24.04-arm }
           - { fedora: '44', arch: x86_64, runner: ubuntu-24.04 }
           - { fedora: '44', arch: aarch64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.runner }}
