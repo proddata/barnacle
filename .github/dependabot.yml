@@ -1,0 +1,52 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /console
+    schedule: { interval: weekly, day: monday }
+    groups:
+      console-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /integration
+    schedule: { interval: monthly }
+    groups:
+      integration-all:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images that track a CI matrix are bumped by hand together with it:
+  # postgres (ci.yml matrix, compose.yaml), fedora (RPM matrix), node (console build).
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /console
+      - /integration/pgcertgen
+      - /integration/pgbouncer
+      - /integration/fedora-service
+    schedule: { interval: weekly, day: monday }
+    ignore:
+      - dependency-name: fedora
+        update-types: ["version-update:semver-major"]
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: monthly }
+    ignore:
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]

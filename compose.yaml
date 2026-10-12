@@ -6,7 +6,7 @@ services:
     volumes:
       - pgcerts:/certs
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: barnacle
       POSTGRES_PASSWORD: barnacle_dev_password
@@ -18,7 +18,7 @@ services:
       timeout: 2s
       retries: 15
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
       - pgcerts:/pgcerts:ro
     depends_on:
       pgcertgen:
