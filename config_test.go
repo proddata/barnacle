@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"slices"
 	"strings"
@@ -175,6 +177,9 @@ func TestSettingNamesAreAllRead(t *testing.T) {
 // settings.
 func TestSettingNamesMatchDeploymentDocs(t *testing.T) {
 	doc, err := os.ReadFile("docs/deployment.md")
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Skip("docs are not part of the source archive that packages build from")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
