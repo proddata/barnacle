@@ -7,10 +7,16 @@ import (
 	"testing"
 )
 
+// envMap turns a map into the lookup function loadSettings takes, so tests set
+// the environment without touching the real process environment.
 func envMap(pairs map[string]string) func(string) string {
 	return func(key string) string { return pairs[key] }
 }
 
+// What it tests: an empty environment.
+// Expected: the documented defaults (listen on :8080, PostgreSQL at
+// 127.0.0.1:5432 with verified TLS, 32 connections, 8 concurrent HTTP queries,
+// metrics on the main listener, no direct TLS).
 func TestLoadSettingsDefaults(t *testing.T) {
 	s, err := loadSettings(envMap(nil), nil, false)
 	if err != nil {
@@ -27,8 +33,10 @@ func TestLoadSettingsDefaults(t *testing.T) {
 	}
 }
 
-// The environment a PostgreSQL node's service manager writes for Barnacle:
-// loopback listener behind HAProxy, loopback PostgreSQL without TLS.
+// What it tests: the four variables a PostgreSQL node's service manager writes
+// for Barnacle (loopback listener behind HAProxy, loopback PostgreSQL without
+// TLS). Expected: they load and are applied. If a change makes this fail, the
+// managed-node setup stops working, so update that setup together with it.
 func TestLoadSettingsManagedNodeEnvironment(t *testing.T) {
 	s, err := loadSettings(envMap(map[string]string{
 		"BARNACLE_LISTEN":          "127.0.0.1:9682",
@@ -44,6 +52,10 @@ func TestLoadSettingsManagedNodeEnvironment(t *testing.T) {
 	}
 }
 
+// What it tests: several invalid values at once (bad duration, zero
+// connections, unknown SSL mode, a boolean spelled "yes", bad metrics value,
+// malformed address). Expected: one error that names every variable, so an
+// operator fixes them in a single pass instead of one restart per mistake.
 func TestLoadSettingsReportsEveryProblem(t *testing.T) {
 	_, err := loadSettings(envMap(map[string]string{
 		"BARNACLE_QUERY_TIMEOUT":       "soon",
@@ -66,6 +78,12 @@ func TestLoadSettingsReportsEveryProblem(t *testing.T) {
 	}
 }
 
+// What it tests: values that are individually valid but wrong in combination or
+// at their limits. Expected: each is refused. Cases: more HTTP queries than
+// connections; a timeout so large that adding the write margin overflows; a
+// memory size that overflows when converted to bytes; a default PostgreSQL
+// address missing from the allowlist; an unknown query mode; a certificate
+// without its key; a CA file that does not exist.
 func TestLoadSettingsRejections(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"http queries above connections": {"BARNACLE_MAX_CONNECTIONS": "4", "BARNACLE_MAX_HTTP_QUERIES": "5"},
@@ -84,6 +102,9 @@ func TestLoadSettingsRejections(t *testing.T) {
 	}
 }
 
+// What it tests: boolean settings are case-insensitive for "true" and "false".
+// Expected: "TRUE" and "False" are accepted and applied. Other spellings are
+// refused (see the reports-every-problem test), so a typo cannot relax a policy.
 func TestLoadSettingsAcceptsBooleanCase(t *testing.T) {
 	s, err := loadSettings(envMap(map[string]string{"BARNACLE_WS_ALLOW_TRUST_AUTH": "TRUE", "BARNACLE_METRICS": "False"}), nil, false)
 	if err != nil {
@@ -94,6 +115,10 @@ func TestLoadSettingsAcceptsBooleanCase(t *testing.T) {
 	}
 }
 
+// What it tests: strict mode with two misspelled BARNACLE_* names next to a
+// valid one and an unrelated variable. Expected: without strict, they are
+// ignored; with strict, both typos are reported by name, and neither the valid
+// setting nor non-BARNACLE variables like PATH are mentioned.
 func TestLoadSettingsStrictRejectsUnknownNames(t *testing.T) {
 	values := map[string]string{"BARNACLE_PG_SSLMODE": "disable"}
 	environ := []string{"PATH=/usr/bin", "BARNACLE_PG_SSLMODE=disable", "BARNACLE_PG_SSLMDOE=disable", "BARNACLE_LISTNE=:1"}
@@ -115,6 +140,9 @@ func TestLoadSettingsStrictRejectsUnknownNames(t *testing.T) {
 	}
 }
 
+// What it tests: strict mode with every registered setting present in the
+// environment. Expected: no "unknown setting" error, so the registry cannot
+// reject a setting the server actually supports.
 func TestStrictKnowsEverySetting(t *testing.T) {
 	var environ []string
 	for _, name := range settingNames {
