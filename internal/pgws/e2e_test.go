@@ -1,12 +1,13 @@
 package pgws
 
 import (
+	"bytes"
 	"context"
-	"encoding/binary"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,10 @@ import (
 	"github.com/proddata/barnacle/internal/gateway"
 )
 
-func fakePG(t testing.TB) string {
+// fakePG plays a backend: it sends script as soon as a client connects, then
+// echoes what it receives. The default script is an MD5 login, as PostgreSQL
+// would send, because the gateway inspects the login.
+func fakePG(t testing.TB, script []byte) string {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -28,9 +32,7 @@ func fakePG(t testing.TB) string {
 			}
 			go func() {
 				defer c.Close()
-				msg := []byte{'K', 0, 0, 0, 12, 0, 0, 4, 210, 1, 2, 3, 4}
-				binary.BigEndian.PutUint32(msg[1:], 12)
-				c.Write(msg)
+				c.Write(script)
 				io.Copy(c, c)
 			}()
 		}
@@ -39,8 +41,12 @@ func fakePG(t testing.TB) string {
 }
 
 func startGateway(t testing.TB) (*httptest.Server, Handler) {
+	return startGatewayWith(t, md5Login, false)
+}
+
+func startGatewayWith(t testing.TB, script []byte, allowTrust bool) (*httptest.Server, Handler) {
 	cfg := &gateway.Config{
-		PGAddr: fakePG(t), PGSSLMode: "disable",
+		PGAddr: fakePG(t, script), PGSSLMode: "disable", AllowTrustLogin: allowTrust,
 		WSIdleTimeout: time.Minute, WSWriteTimeout: 30 * time.Second,
 		UpstreamSlots: make(chan struct{}, 64), CancelSlots: make(chan struct{}, 8),
 		Metrics: &gateway.Metrics{},
@@ -63,10 +69,13 @@ func dial(t testing.TB, srv *httptest.Server) (net.Conn, *websocket.Conn) {
 	return websocket.NetConn(ctx, c, websocket.MessageBinary), c
 }
 
-func readKey(t testing.TB, nc net.Conn) {
-	var k [13]byte
-	if _, err := io.ReadFull(nc, k[:]); err != nil {
+func readLogin(t testing.TB, nc net.Conn, script []byte) {
+	got := make([]byte, len(script))
+	if _, err := io.ReadFull(nc, got); err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Equal(got, script) {
+		t.Fatalf("login bytes changed: %x", got)
 	}
 }
 
@@ -74,7 +83,7 @@ func TestE2EEchoAndShutdown(t *testing.T) {
 	srv, h := startGateway(t)
 	nc, c := dial(t, srv)
 	defer c.CloseNow()
-	readKey(t, nc)
+	readLogin(t, nc, md5Login)
 	payload := make([]byte, 3<<20)
 	for i := range payload {
 		payload[i] = byte(i * 7)
@@ -107,7 +116,7 @@ func TestE2EEchoAndShutdown(t *testing.T) {
 func TestE2EClientCloseReleasesSlot(t *testing.T) {
 	srv, h := startGateway(t)
 	nc, c := dial(t, srv)
-	readKey(t, nc)
+	readLogin(t, nc, md5Login)
 	c.Close(websocket.StatusNormalClosure, "")
 	deadline := time.Now().Add(3 * time.Second)
 	for len(h.UpstreamSlots) != 0 {
@@ -122,7 +131,7 @@ func BenchmarkRelayBulk(b *testing.B) {
 	srv, _ := startGateway(b)
 	nc, c := dial(b, srv)
 	defer c.CloseNow()
-	readKey(b, nc)
+	readLogin(b, nc, md5Login)
 	chunk := make([]byte, 64<<10)
 	const total = 32 << 20
 	b.SetBytes(2 * total) // up and down
@@ -148,7 +157,7 @@ func BenchmarkRelayPingPong(b *testing.B) {
 	srv, _ := startGateway(b)
 	nc, c := dial(b, srv)
 	defer c.CloseNow()
-	readKey(b, nc)
+	readLogin(b, nc, md5Login)
 	msg := make([]byte, 256)
 	buf := make([]byte, 256)
 	b.ReportAllocs()
@@ -158,5 +167,127 @@ func BenchmarkRelayPingPong(b *testing.B) {
 		if _, err := io.ReadFull(nc, buf); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestE2ELoginMethodsPassThrough(t *testing.T) {
+	for name, script := range map[string][]byte{
+		"cleartext": cleartextLogin, "md5": md5Login, "scram": scramLogin, "oauthbearer": oauthLogin,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := startGatewayWith(t, script, false)
+			nc, c := dial(t, srv)
+			defer c.CloseNow()
+			readLogin(t, nc, script)
+			// After login the relay carries arbitrary traffic unchanged.
+			payload := []byte("select 1")
+			nc.Write(payload)
+			echo := make([]byte, len(payload))
+			if _, err := io.ReadFull(nc, echo); err != nil || !bytes.Equal(echo, payload) {
+				t.Fatalf("echo %q, %v", echo, err)
+			}
+		})
+	}
+}
+
+func TestE2ETrustLoginIsClosedBeforeClientSeesAuthenticationOk(t *testing.T) {
+	for name, script := range map[string][]byte{
+		"trust":          trustLogin,
+		"desynchronized": concat([]byte{'N'}, trustLogin),
+		"after notice":   concat(pgMessage('N', 0), trustLogin),
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, h := startGatewayWith(t, script, false)
+			nc, c := dial(t, srv)
+			defer c.CloseNow()
+			data, err := io.ReadAll(nc)
+			if bytes.Contains(data, authOK) || bytes.Contains(data, readyForQuery) {
+				t.Fatalf("client received login data: %x", data)
+			}
+			if err != nil {
+				t.Logf("read ended with %v", err)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for len(h.UpstreamSlots) != 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("upstream slot not released")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}
+
+func TestE2ETrustLoginReportsPolicyViolation(t *testing.T) {
+	srv, _ := startGatewayWith(t, trustLogin, false)
+	c, _, err := websocket.Dial(context.Background(), "ws"+srv.URL[4:]+"/v2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	_, _, err = c.Read(context.Background())
+	if websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("close status %v (%v)", websocket.CloseStatus(err), err)
+	}
+}
+
+func TestE2ETrustLoginAllowedWhenConfigured(t *testing.T) {
+	srv, _ := startGatewayWith(t, trustLogin, true)
+	nc, c := dial(t, srv)
+	defer c.CloseNow()
+	readLogin(t, nc, trustLogin)
+}
+
+func loginFailureCount(t *testing.T, h Handler, transport string) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.Metrics.Serve(rec, nil)
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		if strings.HasPrefix(line, `barnacle_login_failures_total{transport="`+transport+`"}`) {
+			return strings.TrimPrefix(line, `barnacle_login_failures_total{transport="`+transport+`"} `)
+		}
+	}
+	t.Fatal("login failure metric missing")
+	return ""
+}
+
+func TestE2EFailedLoginIsCounted(t *testing.T) {
+	failures := map[string][]byte{
+		"wrong password":       concat(authRequest(10, []byte("SCRAM-SHA-256\x00\x00")...), errorResponse("28P01", "password authentication failed")),
+		"unknown database":     errorResponse("3D000", "database does not exist"),
+		"successful md5 login": md5Login,
+	}
+	for name, script := range failures {
+		t.Run(name, func(t *testing.T) {
+			srv, h := startGatewayWith(t, script, false)
+			nc, c := dial(t, srv)
+			defer c.CloseNow()
+			// The client receives the server's reply unchanged.
+			got := make([]byte, len(script))
+			if _, err := io.ReadFull(nc, got); err != nil || !bytes.Equal(got, script) {
+				t.Fatalf("client received %x, %v", got, err)
+			}
+			want := "0"
+			if name == "wrong password" {
+				want = "1"
+			}
+			if count := loginFailureCount(t, h, "websocket"); count != want {
+				t.Fatalf("websocket login failures = %s, want %s", count, want)
+			}
+		})
+	}
+}
+
+func TestE2EFailedLoginCountedOncePerSession(t *testing.T) {
+	script := concat(errorResponse("28P01", "first"), errorResponse("28P01", "second"))
+	srv, h := startGatewayWith(t, script, false)
+	nc, c := dial(t, srv)
+	defer c.CloseNow()
+	got := make([]byte, len(script))
+	if _, err := io.ReadFull(nc, got); err != nil {
+		t.Fatal(err)
+	}
+	if count := loginFailureCount(t, h, "websocket"); count != "1" {
+		t.Fatalf("websocket login failures = %s, want 1", count)
 	}
 }

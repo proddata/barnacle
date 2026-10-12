@@ -17,9 +17,12 @@ type Metrics struct {
 	sqlDurationSeconds   float64
 	sqlLatency           [6]uint64
 	httpLimitRejects     uint64
+	memoryRejects        uint64
 	upstreamRejects      uint64
 	upstreamFailures     uint64
 	streamInterruptions  [4]uint64
+	loginRejections      [2]uint64
+	loginFailures        [2]uint64
 }
 
 func (m *Metrics) OpenWebSocket() {
@@ -37,6 +40,13 @@ func (m *Metrics) RejectHTTPQuery() {
 	if m != nil {
 		m.mu.Lock()
 		m.httpLimitRejects++
+		m.mu.Unlock()
+	}
+}
+func (m *Metrics) RejectHTTPMemory() {
+	if m != nil {
+		m.mu.Lock()
+		m.memoryRejects++
 		m.mu.Unlock()
 	}
 }
@@ -69,6 +79,37 @@ func (m *Metrics) InterruptHTTPStream(kind string) {
 	}
 	m.mu.Lock()
 	m.streamInterruptions[index]++
+	m.mu.Unlock()
+}
+
+// RejectLogin counts a WebSocket session closed before login completed.
+func (m *Metrics) RejectLogin(reason string) {
+	if m == nil {
+		return
+	}
+	index := 1 // Unknown reasons stay in the fixed malformed series.
+	if reason == "unauthenticated" {
+		index = 0
+	}
+	m.mu.Lock()
+	m.loginRejections[index]++
+	m.mu.Unlock()
+}
+
+// LoginFailure counts a login PostgreSQL refused for bad credentials or an
+// unauthorized role (SQLSTATE class 28), which the ingress cannot see: over
+// WebSocket the login happens inside the tunnel, and over HTTP a bad password
+// and a malformed query share a status code.
+func (m *Metrics) LoginFailure(transport string) {
+	if m == nil {
+		return
+	}
+	index := 0
+	if transport == "websocket" {
+		index = 1
+	}
+	m.mu.Lock()
+	m.loginFailures[index]++
 	m.mu.Unlock()
 }
 
@@ -140,9 +181,12 @@ func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	sqlDurationSeconds := m.sqlDurationSeconds
 	sqlLatency := m.sqlLatency
 	httpLimitRejects := m.httpLimitRejects
+	memoryRejects := m.memoryRejects
 	upstreamRejects := m.upstreamRejects
 	upstreamFailures := m.upstreamFailures
 	streamInterruptions := m.streamInterruptions
+	loginRejections := m.loginRejections
+	loginFailures := m.loginFailures
 	m.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_websocket_active Currently open WebSocket connections.\n# TYPE barnacle_websocket_active gauge\nbarnacle_websocket_active %d\n", websocketActive)
@@ -150,8 +194,10 @@ func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_http_sql_active HTTP SQL requests currently in progress.\n# TYPE barnacle_http_sql_active gauge\nbarnacle_http_sql_active %d\n", httpSQLActive)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_sql_requests_total Completed HTTP SQL requests since startup.\n# TYPE barnacle_sql_requests_total counter\nbarnacle_sql_requests_total %d\n", sqlRequests)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_sql_errors_total HTTP SQL responses with status 400 or higher.\n# TYPE barnacle_sql_errors_total counter\nbarnacle_sql_errors_total %d\n", sqlErrors)
-	_, _ = fmt.Fprintf(w, "# HELP barnacle_limit_rejections_total Requests rejected by a configured concurrency limit.\n# TYPE barnacle_limit_rejections_total counter\nbarnacle_limit_rejections_total{limit=\"http_queries\"} %d\nbarnacle_limit_rejections_total{limit=\"upstream_connections\"} %d\n", httpLimitRejects, upstreamRejects)
+	_, _ = fmt.Fprintf(w, "# HELP barnacle_limit_rejections_total Requests rejected by a configured concurrency limit.\n# TYPE barnacle_limit_rejections_total counter\nbarnacle_limit_rejections_total{limit=\"http_queries\"} %d\nbarnacle_limit_rejections_total{limit=\"upstream_connections\"} %d\nbarnacle_limit_rejections_total{limit=\"http_memory\"} %d\n", httpLimitRejects, upstreamRejects, memoryRejects)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_upstream_connection_failures_total Failed PostgreSQL connection attempts.\n# TYPE barnacle_upstream_connection_failures_total counter\nbarnacle_upstream_connection_failures_total %d\n", upstreamFailures)
+	_, _ = fmt.Fprintf(w, "# HELP barnacle_websocket_login_rejections_total WebSocket sessions closed before PostgreSQL login completed.\n# TYPE barnacle_websocket_login_rejections_total counter\nbarnacle_websocket_login_rejections_total{reason=\"unauthenticated\"} %d\nbarnacle_websocket_login_rejections_total{reason=\"malformed\"} %d\n", loginRejections[0], loginRejections[1])
+	_, _ = fmt.Fprintf(w, "# HELP barnacle_login_failures_total Logins PostgreSQL refused for bad credentials or an unauthorized role (SQLSTATE class 28).\n# TYPE barnacle_login_failures_total counter\nbarnacle_login_failures_total{transport=\"http\"} %d\nbarnacle_login_failures_total{transport=\"websocket\"} %d\n", loginFailures[0], loginFailures[1])
 	_, _ = fmt.Fprintln(w, "# HELP barnacle_sql_stream_interruptions_total HTTP SQL result streams interrupted after streaming began.\n# TYPE barnacle_sql_stream_interruptions_total counter")
 	for i, kind := range [...]string{"result_limit", "canceled", "timeout", "query_or_transport"} {
 		_, _ = fmt.Fprintf(w, "barnacle_sql_stream_interruptions_total{kind=%q} %d\n", kind, streamInterruptions[i])

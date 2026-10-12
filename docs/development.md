@@ -104,4 +104,17 @@ Each JSON line records throughput, latency, errors, skipped requests, concurrenc
 
 For large results, run `node integration/large-result.mjs --transport=ws --rows=100 --row-mib=1` or use `--transport=http` for streaming HTTP. The script reports Barnacle's cgroup peak and whether the query completed. Restart Barnacle between runs. See the [result-size measurements](../benchmarks.md#100-mib-result-comparison) and the [HTTP limits](decisions/sql-http-limits.md) when interpreting the results.
 
+### Memory scenarios
+
+`integration/memory-scenarios.mjs` runs realistic workloads against Barnacle under a real cgroup limit, to show how the [memory budget](decisions/sql-http-limits.md#memory-budget) scales. For each scenario and tier it starts a fresh container with `docker run --memory`, drives it with closed-loop clients, and reports the budget Barnacle derived, peak cgroup memory, latency, throughput, the status mix, and whether the kernel OOM-killed it. The tiers are 256 MiB, 512 MiB, and 512 MiB with 16 concurrent HTTP slots instead of 8.
+
+```sh
+npm ci --prefix integration
+node integration/memory-scenarios.mjs                                   # every scenario and tier
+node integration/memory-scenarios.mjs --tiers 256 --scenario streaming-export --seconds 10
+node integration/memory-scenarios.mjs --check --json results.json      # exit 1 if an expectation fails
+```
+
+The scenarios are API point lookups, dashboard aggregate batches, 1,000-row list pages, jsonb documents, array columns, a mixed production load with a buffered export, bulk inserts, maximum-size request bodies, streamed exports beside API traffic, streamed array rows, 32 WebSocket sessions beside HTTP traffic, and two abusive loads that must be refused without crashing. Realistic scenarios must succeed; abusive ones may return `413` or `503` but never kill the gateway. `--check` also fails if peak memory exceeds 85% of the limit. It seeds PostgreSQL in Docker, so it needs Docker and a few minutes; CI does not run it. Results depend on the host, so compare tiers within one run.
+
 The root Go package wires the server together. `internal/sqlhttp/` implements SQL over HTTP, `internal/pgws/` implements the PostgreSQL WebSocket tunnel, and `internal/gateway/` holds their shared authentication, routing, TLS, limits, and metrics. `console/` is a separate optional browser app, and `integration/` contains the Node suite. Both use the published Neon driver.

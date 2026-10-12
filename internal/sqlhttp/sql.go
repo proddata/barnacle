@@ -368,6 +368,8 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.ReleaseHTTP()
+	lease := &memoryLease{budget: c.HTTPMemory}
+	defer lease.release()
 	pgcfg, err := c.connectionConfig(r)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -377,9 +379,11 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		apiError(w, status, err)
 		return
 	}
-	body, err := readRequestBody(w, r, c.MaxHTTPRequestBytes)
+	body, err := readRequestBody(w, r, c.MaxHTTPRequestBytes, lease)
 	if err != nil {
-		requestDecodeError(w, err)
+		if !c.memoryError(w, err) {
+			requestDecodeError(w, err)
+		}
 		return
 	}
 	if !c.AcquireUpstream() {
@@ -392,14 +396,31 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	conn, err := pgx.ConnectConfig(connectCtx, pgcfg)
 	connectCancel()
 	if err != nil {
-		c.Metrics.UpstreamFailure()
+		if isLoginFailure(err) {
+			c.Metrics.LoginFailure("http")
+		} else {
+			c.Metrics.UpstreamFailure()
+		}
 		dbConnectError(w, err, pgcfg.RequireAuth == "oauth" && pgcfg.OAuthTokenProvider != nil)
 		return
 	}
 	defer conn.Close(context.Background())
-	parsed, err := decodeRequest(r, body)
+	bodyLen := int64(len(body))
+	charged := false
+	parsed, err := decodeRequest(r, body, func(tokens int) error {
+		charged = true
+		return lease.grow(decodeMemoryCost(bodyLen, tokens))
+	})
+	if charged {
+		// The raw body and the decoder's copy are gone; the decoded values stay
+		// until the result has been read.
+		lease.shrink(decodeReleased * bodyLen)
+	}
+	body = nil
 	if err != nil {
-		requestDecodeError(w, err)
+		if !c.memoryError(w, err) {
+			requestDecodeError(w, err)
+		}
 		return
 	}
 	queries, batch, requestOptions, streaming := parsed.queries, parsed.batch, parsed.options, parsed.streaming
@@ -426,7 +447,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		defer tx.Rollback(context.Background())
 		runner = tx
 	}
-	for _, q := range queries {
+	for queryIndex, q := range queries {
 		queryArrayMode := arrayMode
 		if q.ArrayMode != nil {
 			queryArrayMode = *q.ArrayMode
@@ -439,6 +460,9 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// pgx keeps the arguments until its result is read; the decoded
+		// request need not outlive that for earlier queries of a batch.
+		queries[queryIndex].Params, q.Params = nil, nil
 		args = append([]any{pgx.QueryResultFormats{pgx.TextFormatCode}}, args...)
 		queryCtx, queryCancel := ctx, func() {}
 		if c.StatementTimeout > 0 {
@@ -451,7 +475,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if streaming && canStream(rows, conn.TypeMap(), rawText) {
-			if err := streamSingle(w, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, c.MaxHTTPResponseBytes); err != nil {
+			if err := streamSingle(w, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, c.MaxHTTPResponseBytes, lease, c.memoryRefusal); err != nil {
 				kind := interruptedResultKind(err)
 				c.Metrics.InterruptHTTPStream(kind)
 				slog.Warn("HTTP result stream interrupted", "kind", kind)
@@ -460,12 +484,16 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		conn.PgConn().Frontend().SetMaxBodyLen(int(min(c.MaxHTTPBufferedBytes, bufferedRemaining)) + pgRowMessageOverhead)
-		item, err := collect(queryCtx, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, &bufferedRemaining)
+		item, err := collect(queryCtx, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, &bufferedRemaining, lease)
 		queryCancel()
 		if err != nil {
-			if errors.Is(err, errHTTPResultTooLarge) {
+			switch {
+			case errors.Is(err, errHTTPResultTooLarge):
 				apiError(w, http.StatusRequestEntityTooLarge, err)
-			} else {
+			case errors.Is(err, errHTTPMemoryBusy):
+				c.Metrics.RejectHTTPMemory()
+				apiError(w, http.StatusServiceUnavailable, err)
+			default:
 				dbError(w, err)
 			}
 			return
@@ -501,6 +529,25 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// memoryError answers a request the memory budget refused, and reports whether
+// it did. A request too large for the whole budget could never succeed.
+func (c Handler) memoryError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, errHTTPMemoryBusy):
+		c.Metrics.RejectHTTPMemory()
+		apiError(w, http.StatusServiceUnavailable, err)
+	case errors.Is(err, errHTTPResultTooLarge):
+		apiError(w, http.StatusRequestEntityTooLarge, errors.New("request is too large for the gateway's memory budget"))
+	default:
+		return false
+	}
+	return true
+}
+
+// memoryRefusal adapts memoryError for the streaming path, which only sees an
+// error it has not yet written a response for.
+func (c Handler) memoryRefusal(w http.ResponseWriter, err error) bool { return c.memoryError(w, err) }
+
 func requestDecodeError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errRequestComplexity) {
 		apiError(w, http.StatusRequestEntityTooLarge, err)
@@ -514,12 +561,54 @@ func requestDecodeError(w http.ResponseWriter, err error) {
 	apiError(w, http.StatusBadRequest, err)
 }
 
-func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes int64, remaining *int64) (result, error) {
+// convertRow builds the JSON-shaped Go values for one result row.
+func convertRow(values [][]byte, descriptions []pgconn.FieldDescription, fields []field, types *pgtype.Map, arrayMode, rawText bool, unknownArrays map[uint32]map[int]struct{}) (any, error) {
+	out := make([]any, len(values))
+	for i, v := range values {
+		if v == nil {
+			out[i] = nil
+			continue
+		}
+		if rawText {
+			out[i] = string(v)
+			continue
+		}
+		converted, err := pgTextValue(string(v), descriptions[i].DataTypeOID, types)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = converted
+		if _, known := types.TypeForOID(descriptions[i].DataTypeOID); !known && len(v) > 0 && (v[0] == '{' || v[0] == '[') {
+			if unknownArrays[descriptions[i].DataTypeOID] == nil {
+				unknownArrays[descriptions[i].DataTypeOID] = make(map[int]struct{})
+			}
+			unknownArrays[descriptions[i].DataTypeOID][i] = struct{}{}
+		}
+	}
+	if arrayMode {
+		return out, nil
+	}
+	object := make(map[string]any, len(out))
+	for i, v := range out {
+		object[fields[i].Name] = v
+	}
+	return object, nil
+}
+
+func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes int64, remaining *int64, lease *memoryLease) (_ result, err error) {
 	defer rows.Close()
+	// A failed result is discarded, so return its memory before rows.Close
+	// drains the rest of the abandoned query: other requests may be waiting.
+	defer func() {
+		if err != nil {
+			lease.release()
+		}
+	}()
 	descriptions := rows.FieldDescriptions()
 	fields := fieldsFromDescriptions(descriptions)
 	data := make([]any, 0)
 	unknownArrays := make(map[uint32]map[int]struct{})
+	kinds := cellKinds(descriptions, types, rawText)
 	for {
 		if remaining != nil {
 			rows.Conn().PgConn().Frontend().SetMaxBodyLen(int(*remaining) + pgRowMessageOverhead)
@@ -542,37 +631,14 @@ func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, r
 		if remaining != nil {
 			*remaining -= cost
 		}
-		out := make([]any, len(values))
-		for i, v := range values {
-			if v == nil {
-				out[i] = nil
-				continue
-			}
-			if rawText {
-				out[i] = string(v)
-			} else {
-				converted, err := pgTextValue(string(v), descriptions[i].DataTypeOID, types)
-				if err != nil {
-					return result{}, err
-				}
-				out[i] = converted
-				if _, known := types.TypeForOID(descriptions[i].DataTypeOID); !known && len(v) > 0 && (v[0] == '{' || v[0] == '[') {
-					if unknownArrays[descriptions[i].DataTypeOID] == nil {
-						unknownArrays[descriptions[i].DataTypeOID] = make(map[int]struct{})
-					}
-					unknownArrays[descriptions[i].DataTypeOID][i] = struct{}{}
-				}
-			}
+		if err := lease.grow(bufferedRowCost(values, kinds, arrayMode)); err != nil {
+			return result{}, err
 		}
-		if arrayMode {
-			data = append(data, out)
-		} else {
-			object := make(map[string]any, len(out))
-			for i, v := range out {
-				object[fields[i].Name] = v
-			}
-			data = append(data, object)
+		row, err := convertRow(values, descriptions, fields, types, arrayMode, rawText, unknownArrays)
+		if err != nil {
+			return result{}, err
 		}
+		data = append(data, row)
 	}
 	if err := rows.Err(); err != nil {
 		return result{}, err
@@ -655,6 +721,19 @@ func fieldsFromDescriptions(descriptions []pgconn.FieldDescription) []field {
 		fields[i] = field{Name: d.Name, TableID: d.TableOID, ColumnID: d.TableAttributeNumber, DataTypeID: d.DataTypeOID, DataTypeSize: d.DataTypeSize, DataTypeModifier: d.TypeModifier, Format: "text"}
 	}
 	return fields
+}
+
+// isLoginFailure reports whether PostgreSQL refused the credentials: an error in
+// SQLSTATE class 28, or a rejected OAuth token (which pgx does not report as a
+// PostgreSQL error). A server that merely lacks the requested authentication
+// method is a configuration problem, not a failed login.
+func isLoginFailure(err error) bool {
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) {
+		return strings.HasPrefix(pgerr.Code, "28")
+	}
+	var connectErr *pgconn.ConnectError
+	return errors.As(err, &connectErr) && strings.Contains(connectErr.Error(), "OAuth authentication failed:")
 }
 
 func dbConnectError(w http.ResponseWriter, err error, requireOAuth bool) {

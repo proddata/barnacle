@@ -44,13 +44,13 @@ func TestJSONResourceLimits(t *testing.T) {
 	req := httptest.NewRequest("POST", "/sql", nil)
 	for _, count := range []int{maxQueryParameters, maxQueryParameters + 1} {
 		body := []byte(`{"query":"select 1","params":[` + strings.Repeat("0,", count-1) + `0]}`)
-		_, err := decodeRequest(req, body)
+		_, err := decodeRequest(req, body, nil)
 		if errors.Is(err, errRequestComplexity) != (count > maxQueryParameters) {
 			t.Fatalf("%d parameters: %v", count, err)
 		}
 	}
 	for _, body := range []string{`{"query":"select 1"} {}`, `{"query":"select 1","params":[01]}`, `{"query":"select 1","params":["unterminated]}`, `null`, `[]`} {
-		if _, err := decodeRequest(req, []byte(body)); err == nil {
+		if _, err := decodeRequest(req, []byte(body), nil); err == nil {
 			t.Fatalf("accepted %s", body)
 		}
 	}
@@ -58,7 +58,7 @@ func TestJSONResourceLimits(t *testing.T) {
 
 func TestParametersPreserveConversion(t *testing.T) {
 	body := []byte(`{"query":"select 1","params":[null,true,false,123456789012345678901234567890,1.234567890123456789e-100,"escaped\n\"\\",{"z":9007199254740993,"a":[1,null]},[["a,b","a\"b"],[null,"a\\b"]],[]]}`)
-	parsed, err := decodeRequest(httptest.NewRequest("POST", "/sql", nil), body)
+	parsed, err := decodeRequest(httptest.NewRequest("POST", "/sql", nil), body, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestBodyReadLimits(t *testing.T) {
 			if chunked {
 				req.ContentLength = -1
 			}
-			body, err := readRequestBody(httptest.NewRecorder(), req, 32)
+			body, err := readRequestBody(httptest.NewRecorder(), req, 32, nil)
 			if size == 32 && (err != nil || len(body) != 32) || size == 33 && err == nil {
 				t.Fatalf("chunked=%t size=%d: %d bytes, %v", chunked, size, len(body), err)
 			}

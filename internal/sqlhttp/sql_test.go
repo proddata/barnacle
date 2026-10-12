@@ -165,7 +165,7 @@ func TestConnectionConfigBasicAuth(t *testing.T) {
 
 func TestConnectionBodyIsRejected(t *testing.T) {
 	req := httptest.NewRequest("POST", "http://localhost/sql", nil)
-	_, err := decodeRequest(req, []byte(`{"connection":{"host":"remote.example","database":"appdb"},"query":"select 1"}`))
+	_, err := decodeRequest(req, []byte(`{"connection":{"host":"remote.example","database":"appdb"},"query":"select 1"}`), nil)
 	if err == nil || !strings.Contains(err.Error(), "connection must be supplied") {
 		t.Fatalf("connection body error = %v", err)
 	}
