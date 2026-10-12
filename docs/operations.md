@@ -26,6 +26,31 @@ sudo systemctl enable --now barnacle
 
 The package installs `/usr/bin/barnacle`, a systemd service, and `/etc/sysconfig/barnacle`. The service listens on `127.0.0.1:8080` and connects to PostgreSQL on `127.0.0.1:5432` by default, so set the latter in the config file if PostgreSQL is elsewhere. It includes Barnacle's [Apache-2.0 license](../LICENSE) and the [third-party license inventory](../THIRD-PARTY-NOTICES.md).
 
+### Configuring the service from a node agent
+
+A platform that manages the node, such as an agent that writes settings per service, should not write its own unit file. Use the packaged unit and add two small files, so the memory limits, restart policy and sandboxing arrive and update with the package:
+
+```ini
+# /etc/systemd/system/barnacle.service.d/10-node-agent.conf
+[Service]
+EnvironmentFile=/etc/barnacle/barnacle.env
+```
+
+```sh
+# /etc/barnacle/barnacle.env
+BARNACLE_LISTEN=127.0.0.1:9682
+BARNACLE_PG_ADDR=127.0.0.1:5432
+BARNACLE_PG_SSLMODE=disable
+```
+
+How the layers combine:
+
+- A drop-in changes only the lines it names. Everything else, including `MemoryMax`, `Restart=`, `NoNewPrivileges=` and `ProtectSystem=`, keeps the packaged value. To change a limit, name just that line (for example `MemoryMax=384M`) and set `GOMEMLIMIT` in proportion, as described below.
+- A drop-in `EnvironmentFile=` is added after the packaged `/etc/sysconfig/barnacle`. When both files define a variable, the later file wins; a variable only the packaged file defines (such as `GOMEMLIMIT`) still applies.
+- A `BARNACLE_*` variable that neither file defines uses Barnacle's built-in default. Write only the values that differ.
+- Leave `/etc/sysconfig/barnacle` alone: it is a package-owned config file and an upgrade may add a `.rpmnew` next to your edits.
+- Run `systemctl daemon-reload` after changing a drop-in, and restart the service after changing a settings file. The Fedora service test covers this layout.
+
 ### Fixed-user key-access variant
 
 The RPM also ships an opt-in [key-access drop-in](../packaging/rpm/barnacle-key-access.conf). Its fixed `barnacle` system user and group replace `DynamicUser=yes`; membership in `barnacle-service-keys` lets the service read group-restricted keys under `/run/barnacle/service-keys/`. It explicitly mounts that directory and `/etc/pki/barnacle/` read-only. Create the user, its primary group, and the key-access group before starting the variant. If the host stores keys or certificates elsewhere, set `ReadOnlyPaths=` to those directories and `SupplementaryGroups=` to the key's existing group. Ensure directory traversal permissions and key group ownership also permit reading. The packaged unit's `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, restart policy, and memory limits still apply.
