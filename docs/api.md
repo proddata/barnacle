@@ -164,8 +164,13 @@ See [connection and authentication](#connection-and-authentication) and the [opt
 | `query` | String | Required for a single query; must contain non-whitespace SQL. |
 | `params` | Array | Optional values for `$1`, `$2`, and so on; defaults to `[]`. |
 | `arrayMode` | Boolean | Optional per-query override for `Neon-Array-Mode` or `options.arrayMode`. |
+| `maxRows` | Positive integer | Optional per-query limit on returned rows; overrides `Barnacle-Max-Rows`. See [limiting returned rows](#limiting-returned-rows). |
 | `queries` | Array of query objects | Batch form, containing 1–100 objects with `query`, optional `params`, and optional `arrayMode`. Use this instead of the top-level `query`. |
 | `options` | Object | Alternative to the `Neon-*` option headers; see the alias table above. |
+
+### Limiting returned rows
+
+`maxRows` (or the `Barnacle-Max-Rows` header, for clients such as the Neon driver that build the body themselves) caps the rows in `rows`. Barnacle reads and discards the rest of the result instead of cancelling the query, so writes are never undone and `rowCount` is still the full total. When the result had more rows than the limit, the response also contains `"truncated": true` and a `Barnacle-Truncated: true` header; a result with exactly `maxRows` rows is not truncated. The query still runs to completion on PostgreSQL, so use SQL `LIMIT` to reduce its work. It applies to buffered results only; combining it with `Barnacle-Response-Mode: streaming` returns `400`. In a batch it applies to each query.
 
 ### Single query
 

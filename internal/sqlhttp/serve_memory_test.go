@@ -15,6 +15,11 @@ import (
 // resultBackend logs every client in and answers each query with `rows` rows of
 // one int4 column.
 func resultBackend(t *testing.T, rows int) string {
+	return resultBackendTag(t, rows, "SELECT")
+}
+
+// resultBackendTag is resultBackend with a chosen command tag, such as "SELECT 5".
+func resultBackendTag(t *testing.T, rows int, tag string) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -63,7 +68,7 @@ func resultBackend(t *testing.T, rows int) string {
 					for i := 0; i < rows; i++ {
 						backend.Send(&pgproto3.DataRow{Values: [][]byte{[]byte("1234567")}})
 					}
-					backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("SELECT")})
+					backend.Send(&pgproto3.CommandComplete{CommandTag: []byte(tag)})
 					backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 					if backend.Flush() != nil {
 						return
