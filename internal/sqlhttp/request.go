@@ -80,6 +80,7 @@ type parsedRequest struct {
 	batch     bool
 	options   executionOptions
 	streaming bool
+	maxRows   int64 // Barnacle-Max-Rows default; a query's maxRows overrides it.
 }
 
 // decodeRequest runs after the upload size check and PostgreSQL authentication.
@@ -117,16 +118,33 @@ func decodeRequest(r *http.Request, body []byte, charge func(tokens int) error) 
 	}
 	parsed.queries = req.Queries
 	if !parsed.batch {
-		parsed.queries = []query{{Query: req.Query, Params: req.Params, ArrayMode: req.ArrayMode}}
+		parsed.queries = []query{{Query: req.Query, Params: req.Params, ArrayMode: req.ArrayMode, MaxRows: req.MaxRows}}
 	}
 	if len(parsed.queries) == 0 || len(parsed.queries) > 100 {
 		return parsed, errors.New("expected 1 to 100 queries")
+	}
+	for _, q := range parsed.queries {
+		if q.MaxRows != nil && *q.MaxRows <= 0 {
+			return parsed, errors.New("maxRows must be positive")
+		}
 	}
 	if parsed.options, err = optionsForRequest(r, req, parsed.batch); err != nil {
 		return parsed, err
 	}
 	if parsed.streaming, err = responseMode(r, parsed.batch); err != nil {
 		return parsed, err
+	}
+	if parsed.maxRows, err = maxRowsHeader(r); err != nil {
+		return parsed, err
+	}
+	if parsed.streaming {
+		limited := parsed.maxRows > 0
+		for _, q := range parsed.queries {
+			limited = limited || q.MaxRows != nil
+		}
+		if limited {
+			return parsed, errors.New("maxRows is not supported with Barnacle-Response-Mode: streaming")
+		}
 	}
 	for _, q := range parsed.queries {
 		if strings.TrimSpace(q.Query) == "" {
