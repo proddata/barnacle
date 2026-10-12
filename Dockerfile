@@ -5,7 +5,7 @@ RUN go mod download
 COPY *.go ./
 COPY internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /barnacle .
-FROM alpine:3.21
+FROM alpine:3.24
 RUN apk upgrade --no-cache && addgroup -S barnacle && adduser -S -G barnacle barnacle
 COPY --from=build /barnacle /usr/local/bin/barnacle
 COPY LICENSE THIRD-PARTY-NOTICES.md /usr/share/doc/barnacle/
