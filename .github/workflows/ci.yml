@@ -262,7 +262,7 @@ jobs:
     needs: fedora-rpm
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: barnacle-fedora44-rpm-aarch64
           path: dist
