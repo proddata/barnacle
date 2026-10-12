@@ -25,6 +25,9 @@ type query struct {
 	Query     string `json:"query"`
 	Params    []any  `json:"params"`
 	ArrayMode *bool  `json:"arrayMode"`
+	// MaxRows limits the rows returned for this query, overriding the
+	// Barnacle-Max-Rows header.
+	MaxRows *int64 `json:"maxRows"`
 }
 type queryOptions struct {
 	ArrayMode      *bool   `json:"arrayMode"`
@@ -37,6 +40,7 @@ type queryRequest struct {
 	Query      string          `json:"query"`
 	Params     []any           `json:"params"`
 	ArrayMode  *bool           `json:"arrayMode"`
+	MaxRows    *int64          `json:"maxRows"`
 	Queries    []query         `json:"queries"`
 	Options    *queryOptions   `json:"options"`
 	Connection json.RawMessage `json:"connection"`
@@ -143,6 +147,24 @@ func responseMode(r *http.Request, batch bool) (bool, error) {
 	}
 }
 
+// maxRowsHeader reads Barnacle-Max-Rows, the request-wide default for maxRows;
+// 0 means no limit. The header exists for clients such as the Neon driver that
+// build the JSON body themselves.
+func maxRowsHeader(r *http.Request) (int64, error) {
+	values := r.Header.Values("Barnacle-Max-Rows")
+	if len(values) == 0 {
+		return 0, nil
+	}
+	if len(values) != 1 {
+		return 0, errors.New("Barnacle-Max-Rows requires one value")
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(values[0]), 10, 64)
+	if err != nil || n <= 0 {
+		return 0, errors.New("Barnacle-Max-Rows must be a positive integer")
+	}
+	return n, nil
+}
+
 func rejectLegacyHeaders(r *http.Request) error {
 	if len(r.Header.Values("Barnacle-Batch-Mode")) > 0 {
 		return errors.New("Barnacle-Batch-Mode is unsupported")
@@ -170,6 +192,9 @@ type result struct {
 	Command    string  `json:"command"`
 	RowCount   *int64  `json:"rowCount"`
 	RowAsArray bool    `json:"rowAsArray"`
+	// Truncated is set only when the result held more rows than maxRows;
+	// rowCount still holds the full total.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -464,6 +489,10 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		// request need not outlive that for earlier queries of a batch.
 		queries[queryIndex].Params, q.Params = nil, nil
 		args = append([]any{pgx.QueryResultFormats{pgx.TextFormatCode}}, args...)
+		maxRows := parsed.maxRows
+		if q.MaxRows != nil {
+			maxRows = *q.MaxRows
+		}
 		queryCtx, queryCancel := ctx, func() {}
 		if c.StatementTimeout > 0 {
 			queryCtx, queryCancel = context.WithTimeout(ctx, c.StatementTimeout)
@@ -484,7 +513,7 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		conn.PgConn().Frontend().SetMaxBodyLen(int(min(c.MaxHTTPBufferedBytes, bufferedRemaining)) + pgRowMessageOverhead)
-		item, err := collect(queryCtx, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, &bufferedRemaining, lease)
+		item, err := collect(queryCtx, rows, conn.TypeMap(), queryArrayMode, rawText, c.MaxHTTPRowBytes, maxRows, &bufferedRemaining, lease)
 		queryCancel()
 		if err != nil {
 			switch {
@@ -525,6 +554,10 @@ func (c Handler) Serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(encodedBatch)
 	} else {
+		if results[0].Truncated {
+			// For clients whose driver drops unknown body fields.
+			w.Header().Set("Barnacle-Truncated", "true")
+		}
 		writeLimitedJSON(w, 200, results[0], c.MaxHTTPResponseBytes)
 	}
 }
@@ -595,7 +628,7 @@ func convertRow(values [][]byte, descriptions []pgconn.FieldDescription, fields 
 	return object, nil
 }
 
-func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes int64, remaining *int64, lease *memoryLease) (_ result, err error) {
+func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes, maxRows int64, remaining *int64, lease *memoryLease) (_ result, err error) {
 	defer rows.Close()
 	// A failed result is discarded, so return its memory before rows.Close
 	// drains the rest of the abandoned query: other requests may be waiting.
@@ -607,6 +640,7 @@ func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, r
 	descriptions := rows.FieldDescriptions()
 	fields := fieldsFromDescriptions(descriptions)
 	data := make([]any, 0)
+	truncated := false
 	unknownArrays := make(map[uint32]map[int]struct{})
 	kinds := cellKinds(descriptions, types, rawText)
 	for {
@@ -614,6 +648,18 @@ func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, r
 			rows.Conn().PgConn().Frontend().SetMaxBodyLen(int(*remaining) + pgRowMessageOverhead)
 		}
 		if !rows.Next() {
+			break
+		}
+		if maxRows > 0 && int64(len(data)) >= maxRows {
+			// Another row arrived past the limit, so the result really is larger.
+			truncated = true
+			// Discard the rest rather than cancel, which would undo a write and
+			// abort a batch: the command tag, and with it the true row count,
+			// still arrives. Skipped rows are not buffered, so only the per-row
+			// wire limit applies.
+			rows.Conn().PgConn().Frontend().SetMaxBodyLen(int(maxRowBytes) + pgRowMessageOverhead)
+			for rows.Next() {
+			}
 			break
 		}
 		values := rows.RawValues()
@@ -681,7 +727,7 @@ func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, r
 		}
 	}
 	command, _, _ := strings.Cut(tag.String(), " ")
-	return result{Rows: data, Fields: fields, Command: command, RowCount: commandRowCount(tag.String()), RowAsArray: arrayMode}, nil
+	return result{Rows: data, Fields: fields, Command: command, RowCount: commandRowCount(tag.String()), RowAsArray: arrayMode, Truncated: truncated}, nil
 }
 
 func batchIsolation(value string) (pgx.TxIsoLevel, error) {

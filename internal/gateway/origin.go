@@ -77,6 +77,7 @@ func (c Config) AllowOrigin(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if c.OriginAllowed(r) {
 		w.Header().Set("Access-Control-Allow-Origin", origins[0])
+		w.Header().Set("Access-Control-Expose-Headers", "Barnacle-Truncated")
 		return true
 	}
 	http.Error(w, "origin denied", http.StatusForbidden)
@@ -88,7 +89,7 @@ func (c Config) Preflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Neon-Connection-String, Neon-Array-Mode, Neon-Raw-Text-Output, Neon-Batch-Read-Only, Neon-Batch-Isolation-Level, Neon-Batch-Deferrable, Barnacle-Response-Mode")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Neon-Connection-String, Neon-Array-Mode, Neon-Raw-Text-Output, Neon-Batch-Read-Only, Neon-Batch-Isolation-Level, Neon-Batch-Deferrable, Barnacle-Response-Mode, Barnacle-Max-Rows")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	w.WriteHeader(http.StatusNoContent)
 }

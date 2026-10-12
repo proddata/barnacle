@@ -8,7 +8,11 @@ neonConfig.pipelineConnect = false; // Let PostgreSQL challenge SCRAM or MD5 log
 
 let nextTraceId = 0;
 const pendingHTTP = [];
-neonConfig.fetchFunction = async (input, init) => {
+// Barnacle-specific per-request options travel through the driver's
+// `fetchOptions` and are applied here, because fetchOptions cannot replace the
+// driver's own request headers.
+neonConfig.fetchFunction = async (input, { barnacleMaxRows, ...init } = {}) => {
+  if (barnacleMaxRows) init.headers = { ...init.headers, 'Barnacle-Max-Rows': String(barnacleMaxRows) };
   const body = String(init?.body ?? '');
   let query;
   let queries;
@@ -91,6 +95,11 @@ function visibleConnectionString(raw) {
   return url.toString();
 }
 
+// The driver wraps fetch's AbortError in a NeonDbError.
+export function isAbort(error) {
+  return error?.name === 'AbortError' || /AbortError|aborted/.test(error?.message ?? '');
+}
+
 export function safeJSON(value, space = 2) {
   return JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item, space);
 }
@@ -103,6 +112,11 @@ export function safeError(error, settings) {
   return message;
 }
 
+function isLimited(result) {
+  const rows = result.rows?.length ?? 0;
+  return Number.isInteger(result.rowCount) && rows > 0 && rows < result.rowCount;
+}
+
 function resultPreview(result) {
   return {
     command: result.command ?? null,
@@ -110,7 +124,13 @@ function resultPreview(result) {
     fields: (result.fields ?? []).map((field) => ({ name: field.name, dataTypeID: field.dataTypeID })),
     rows: (result.rows ?? []).slice(0, 20),
     rowsTruncated: (result.rows?.length ?? 0) > 20,
+    // Barnacle keeps rowCount as the full total when Max rows limits the rows returned.
+    limitedByMaxRows: isLimited(result),
   };
+}
+
+function httpFetchOptions({ signal, maxRows } = {}) {
+  return { signal, barnacleMaxRows: maxRows };
 }
 
 export async function closeQuerySession(session) {
@@ -193,7 +213,9 @@ export async function openQuerySession(settings, session) {
   }
 }
 
-export async function executeQuery(settings, sql, params = [], report = () => {}, purpose = 'query', session = null) {
+// options.signal aborts an HTTP request; Barnacle then cancels the PostgreSQL query.
+// options.maxRows sends Barnacle-Max-Rows (HTTP only).
+export async function executeQuery(settings, sql, params = [], report = () => {}, purpose = 'query', session = null, options = {}) {
   const url = connectionString(settings);
   const websocket = settings.method === 'ws-password';
   const address = new URL(url);
@@ -234,7 +256,7 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
       }
     } else {
       const query = neon(url, settings.method === 'http-bearer' ? { authToken: settings.token.trim() } : {});
-      result = await query.query(sql, params, { fullResults: true });
+      result = await query.query(sql, params, { fullResults: true, fetchOptions: httpFetchOptions(options) });
     }
     trace.state = 'success';
     trace.durationMs = Math.round(performance.now() - started);
@@ -242,9 +264,15 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
     report({ ...trace });
     return result;
   } catch (error) {
-    trace.state = 'error';
     trace.durationMs = Math.round(performance.now() - started);
-    trace.response = { error: safeError(error, settings), code: error?.code ?? null };
+    if (isAbort(error)) {
+      // The driver reports a client abort as "Error connecting to database: AbortError".
+      trace.state = 'cancelled';
+      trace.response = { cancelled: true, message: 'Request aborted by the client. Barnacle cancels the PostgreSQL query.' };
+    } else {
+      trace.state = 'error';
+      trace.response = { error: safeError(error, settings), code: error?.code ?? null };
+    }
     report({ ...trace });
     throw error;
   } finally {
@@ -255,7 +283,7 @@ export async function executeQuery(settings, sql, params = [], report = () => {}
   }
 }
 
-export async function executeBatch(settings, statements, report = () => {}) {
+export async function executeBatch(settings, statements, report = () => {}, options = {}) {
   if (settings.method === 'ws-password') throw new Error('Select an HTTP transport for batch queries.');
   if (statements.length < 1 || statements.length > 100) throw new Error('An HTTP batch needs 1 to 100 statements.');
   const url = connectionString(settings);
@@ -281,7 +309,7 @@ export async function executeBatch(settings, statements, report = () => {}) {
     const query = neon(url, settings.method === 'http-bearer' ? { authToken: settings.token.trim() } : {});
     const results = await query.transaction(
       statements.map((sql) => query.query(sql, [], { fullResults: true })),
-      { fullResults: true },
+      { fullResults: true, fetchOptions: httpFetchOptions(options) },
     );
     trace.state = 'success';
     trace.durationMs = Math.round(performance.now() - started);
@@ -289,9 +317,15 @@ export async function executeBatch(settings, statements, report = () => {}) {
     report({ ...trace });
     return results;
   } catch (error) {
-    trace.state = 'error';
     trace.durationMs = Math.round(performance.now() - started);
-    trace.response = { error: safeError(error, settings), code: error?.code ?? null };
+    if (isAbort(error)) {
+      // The driver reports a client abort as "Error connecting to database: AbortError".
+      trace.state = 'cancelled';
+      trace.response = { cancelled: true, message: 'Request aborted by the client. Barnacle cancels the PostgreSQL query.' };
+    } else {
+      trace.state = 'error';
+      trace.response = { error: safeError(error, settings), code: error?.code ?? null };
+    }
     report({ ...trace });
     throw error;
   } finally {

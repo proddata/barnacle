@@ -2,7 +2,7 @@ import * as monaco from 'monaco-editor/editor/editor.api';
 import 'monaco-editor/languages/definitions/pgsql/register';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import './style.css';
-import { COLUMNS_SQL, TABLES_SQL, closeQuerySession, openQuerySession, executeBatch, executeQuery, quoteIdentifier, safeError, safeJSON } from './db.js';
+import { COLUMNS_SQL, TABLES_SQL, closeQuerySession, openQuerySession, executeBatch, executeQuery, isAbort, quoteIdentifier, safeError, safeJSON } from './db.js';
 import { splitStatements } from './statements.js';
 import { startMetrics } from './metrics.js';
 
@@ -22,6 +22,7 @@ const resultJSON = $('result-json');
 const resultSummary = $('result-summary');
 const runButton = $('run-query');
 const batchToggle = $('http-batch');
+const maxRowsInput = $('max-rows');
 const statusMessage = $('status-message');
 const statusMeta = $('status-meta');
 const connectionBadge = $('connection-badge');
@@ -75,6 +76,23 @@ SELECT 2 AS blocked_while_aborted;
 ROLLBACK;
 -- Then select and run this statement to verify recovery:
 SELECT 3 AS after_rollback;`,
+  },
+  'cancel-slow-query': {
+    name: 'Cancel a slow query',
+    http: true,
+    sql: `-- Use an HTTP connection, run this, then press Cancel (top right).
+-- Barnacle cancels the PostgreSQL query when the request is aborted:
+-- Metrics shows the active HTTP request drop, and pg_stat_activity loses the row.
+select pg_sleep(60) as slept;`,
+  },
+  'limit-result-size': {
+    name: 'Limit result size',
+    http: true,
+    maxRows: 5,
+    sql: `-- Use an HTTP connection. Max rows is set to 5 for this example.
+-- The result shows 5 of 100000 rows and is marked as limited.
+-- The query still runs to completion; use SQL LIMIT to reduce its work.
+select n, md5(n::text) as hash from generate_series(1, 100000) as n;`,
   },
   'server-info': {
     name: 'Server and session info',
@@ -163,6 +181,12 @@ function settings() {
   };
 }
 
+// Positive integer from the Max rows field, or undefined for no limit.
+function maxRows() {
+  const value = Number.parseInt(maxRowsInput.value, 10);
+  return fields.method.value !== 'ws-password' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 function activeProfile() { return profiles.find((profile) => profile.id === activeConnectionId); }
 
 function saveProfileFromFields() {
@@ -172,7 +196,7 @@ function saveProfileFromFields() {
     name: fields['connection-name'].value.trim() || 'Unnamed connection',
     host: fields.host.value, database: fields.database.value, username: fields.username.value,
     method: fields.method.value, authMethod: fields['auth-method'].value,
-    httpBatch: batchToggle.checked,
+    httpBatch: batchToggle.checked, maxRows: maxRowsInput.value,
   });
   secrets.set(profile.id, { password: fields.password.value, token: fields.token.value });
   localStorage.setItem(PROFILE_KEY, JSON.stringify(profiles));
@@ -197,6 +221,7 @@ function showConnection(id) {
   for (const name of ['host', 'database', 'username', 'method']) fields[name].value = profile[name] ?? '';
   fields['auth-method'].value = profile.authMethod ?? '';
   batchToggle.checked = profile.httpBatch === true;
+  maxRowsInput.value = profile.maxRows ?? '';
   fields.password.value = secret.password;
   fields.token.value = secret.token;
   updateMethodFields(); renderConnectionSelect();
@@ -225,6 +250,7 @@ function updateMethodFields() {
   $('token-field').hidden = method !== 'http-bearer';
   $('auth-method-field').hidden = method !== 'http-password';
   $('http-batch-field').hidden = method === 'ws-password';
+  $('max-rows-field').hidden = method === 'ws-password';
   renderConnectionSummary();
 }
 
@@ -233,9 +259,29 @@ function renderConnectionSummary() {
   $('connection-method-summary').textContent = ({ 'ws-password': 'WebSocket · Password', 'http-password': 'HTTP · Password', 'http-bearer': 'HTTP · Bearer' })[fields.method.value] ?? fields.method.value;
 }
 
+// The in-flight run, so Cancel can abort it. HTTP aborts the request;
+// WebSocket has no per-request abort, so Cancel closes the session instead.
+let activeRun = null;
+function beginRun(tab, current) {
+  activeRun = { tab, websocket: current.method === 'ws-password', controller: new AbortController(), cancelled: false };
+  return activeRun;
+}
+function endRun() { activeRun = null; }
+function cancelRun() {
+  if (!activeRun || activeRun.cancelled) return;
+  activeRun.cancelled = true;
+  activeRun.controller.abort();
+  if (activeRun.websocket) void closeQuerySession(activeRun.tab.session);
+  setStatus('Cancelling…', 'Barnacle cancels the PostgreSQL query when the request ends');
+}
+function failureMessage(run, error, current) {
+  return run.cancelled || isAbort(error) ? 'Cancelled. Barnacle cancels the PostgreSQL query when the request ends.' : safeError(error, current);
+}
+
 function setRunBusy(value) {
   busy = value;
   runButton.disabled = value;
+  $('cancel-query').hidden = !value;
   renderConnectionInfo();
 }
 
@@ -391,7 +437,7 @@ function renderTraceList() {
     const item = document.createElement('button');
     item.type = 'button'; item.className = `trace-item ${trace.id === selectedTraceId ? 'active' : ''}`;
     const state = document.createElement('span'); state.className = `trace-status ${trace.state}`;
-    state.textContent = trace.state === 'success' ? '✓' : trace.state === 'error' ? '!' : '…';
+    state.textContent = ({ success: '✓', error: '!', cancelled: '■' })[trace.state] ?? '…';
     const method = document.createElement('span'); method.className = 'trace-method'; method.textContent = `${trace.transport === 'WebSocket' ? 'WS' : 'HTTP'} · ${trace.purpose === 'query' ? 'query' : trace.purpose}`;
     const operation = document.createElement('span'); operation.className = 'trace-operation'; operation.textContent = operationLabel(trace); operation.title = operation.textContent;
     const duration = document.createElement('span'); duration.className = 'trace-duration'; duration.textContent = durationLabel(trace.durationMs);
@@ -492,7 +538,9 @@ function renderResult() {
   const rows = result.rows ?? [];
   $('export-csv').disabled = rows.length === 0;
   const columns = result.fields?.map((field) => field.name) ?? Object.keys(rows[0] ?? {});
-  resultSummary.textContent = `${result.command ?? 'QUERY'} · ${result.rowCount ?? rows.length} row${(result.rowCount ?? rows.length) === 1 ? '' : 's'} · ${lastResult.durationMs} ms${rows.length > 500 ? ' · showing first 500' : ''}`;
+  // Barnacle keeps rowCount as the full total when Max rows limits the returned rows.
+  const limited = Number.isInteger(result.rowCount) && rows.length > 0 && rows.length < result.rowCount;
+  resultSummary.textContent = `${result.command ?? 'QUERY'} · ${result.rowCount ?? rows.length} row${(result.rowCount ?? rows.length) === 1 ? '' : 's'} · ${lastResult.durationMs} ms${limited ? ` · limited by Max rows to ${rows.length}` : ''}${rows.length > 500 ? ' · showing first 500' : ''}`;
   if (!columns.length) {
     const empty = document.createElement('div'); empty.className = 'result-empty'; empty.textContent = 'Query completed. No result columns.';
     resultData.append(empty);
@@ -556,6 +604,7 @@ async function runCurrent() {
     return;
   }
   setRunBusy(true);
+  const run = beginRun(tab, current);
   tab.results = []; tab.selectedResultIndex = 0;
   setStatus(`Running ${statements.length} statement${statements.length === 1 ? '' : 's'}…`);
   for (const [index, statement] of statements.entries()) {
@@ -563,21 +612,22 @@ async function runCurrent() {
     let traceId = null;
     const captureTrace = (trace) => { traceId = trace.id; reportTrace({ ...trace, tabId: tab.id, resultIndex: index }); };
     try {
-      const result = await executeQuery(current, statement.sql, [], captureTrace, 'query', tab.session);
+      const result = await executeQuery(current, statement.sql, [], captureTrace, 'query', tab.session, { signal: run.controller.signal, maxRows: maxRows() });
       tab.results.push({ ...result, sql: statement.sql, traceId, durationMs: Math.round(performance.now() - started) });
       if (current.method !== 'ws-password') setConnectionState('connected', `${current.host} / ${current.database}`);
     } catch (error) {
-      const message = safeError(error, current);
+      const message = failureMessage(run, error, current);
       tab.results.push({ sql: statement.sql, traceId, error: message, durationMs: Math.round(performance.now() - started) });
       tab.selectedResultIndex = index;
-      setStatus(`Statement ${index + 1} failed`, message);
-      if (current.method !== 'ws-password') setConnectionState('failed', `${current.host} / ${current.database}`);
+      setStatus(run.cancelled ? `Statement ${index + 1} cancelled` : `Statement ${index + 1} failed`, message);
+      if (current.method !== 'ws-password' && !run.cancelled) setConnectionState('failed', `${current.host} / ${current.database}`);
       break;
     }
     tab.selectedResultIndex = index;
     setStatus(`Completed ${index + 1} of ${statements.length}`, `${current.host} / ${current.database}`);
     if (activeTabId === tab.id) { renderResult(); if (traceId) selectTrace(traceId, false); }
   }
+  endRun();
   setRunBusy(false);
   if (activeTabId === tab.id) { renderResult(); showResultView('data'); }
 }
@@ -585,24 +635,26 @@ async function runCurrent() {
 async function runHTTPBatch(statements, tab, current) {
   if (statements.length > 100) { setStatus('HTTP batch limit is 100 statements.'); return; }
   setRunBusy(true);
+  const run = beginRun(tab, current);
   tab.results = []; tab.selectedResultIndex = 0;
   setStatus(`Running ${statements.length} statements in one HTTP transaction…`);
   const started = performance.now();
   let traceId = null;
   const captureTrace = (trace) => { traceId = trace.id; reportTrace({ ...trace, tabId: tab.id, resultIndex: 0 }); };
   try {
-    const results = await executeBatch(current, statements.map((statement) => statement.sql), captureTrace);
+    const results = await executeBatch(current, statements.map((statement) => statement.sql), captureTrace, { signal: run.controller.signal, maxRows: maxRows() });
     const durationMs = Math.round(performance.now() - started);
     tab.results = results.map((result, index) => ({ ...result, sql: statements[index].sql, traceId, durationMs }));
     tab.selectedResultIndex = results.length - 1;
     setStatus(`HTTP transaction completed · ${results.length} results`, `${current.host} / ${current.database}`);
     setConnectionState('connected', `${current.host} / ${current.database}`);
   } catch (error) {
-    const message = safeError(error, current);
-    tab.results = [{ sql: 'HTTP transaction', traceId, error: message, durationMs: Math.round(performance.now() - started) }];
-    setStatus('HTTP transaction failed', message);
-    setConnectionState('failed', `${current.host} / ${current.database}`);
+    const message = failureMessage(run, error, current);
+    tab.results = [{ sql: 'HTTP transaction', traceId, error: run.cancelled ? `${message} The transaction was rolled back.` : message, durationMs: Math.round(performance.now() - started) }];
+    setStatus(run.cancelled ? 'HTTP transaction cancelled' : 'HTTP transaction failed', message);
+    if (!run.cancelled) setConnectionState('failed', `${current.host} / ${current.database}`);
   } finally {
+    endRun();
     setRunBusy(false);
     if (activeTabId === tab.id) { renderResult(); showResultView('data'); if (traceId) selectTrace(traceId, false); }
   }
@@ -816,6 +868,11 @@ async function rollbackTransaction() {
 }
 
 $('run-query').addEventListener('click', () => runCurrent());
+$('cancel-query').addEventListener('click', cancelRun);
+maxRowsInput.addEventListener('change', () => {
+  saveProfileFromFields();
+  setStatus(maxRows() ? `HTTP results are limited to ${maxRows()} rows per query.` : 'HTTP results are not limited.');
+});
 $('connect-session').addEventListener('click', () => connectSession());
 $('disconnect-session').addEventListener('click', disconnectSession);
 $('rollback-transaction').addEventListener('click', rollbackTransaction);
@@ -826,10 +883,13 @@ $('example-query').addEventListener('change', (event) => {
   const example = examples[event.target.value];
   event.target.value = '';
   if (!example) return;
+  if (example.maxRows && fields.method.value !== 'ws-password') { maxRowsInput.value = String(example.maxRows); saveProfileFromFields(); }
   createTab(example.name, example.sql);
   setStatus(example.websocket && fields.method.value !== 'ws-password'
     ? 'Select WebSocket · password before running this example.'
-    : `Opened ${example.name}`);
+    : example.http && fields.method.value === 'ws-password'
+      ? 'Select an HTTP connection before running this example.'
+      : `Opened ${example.name}`);
 });
 batchToggle.addEventListener('change', () => {
   saveProfileFromFields();

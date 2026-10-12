@@ -59,6 +59,72 @@ test('aborted HTTP request stops its PostgreSQL query', async () => {
   }
 });
 
+// The Neon driver wraps fetch's AbortError in a NeonDbError.
+const isAbort = (error) => error.name === 'AbortError' || /AbortError|aborted/.test(error.message);
+
+test('Neon driver abort signal stops its PostgreSQL query', async () => {
+  const name = `barnacle_driver_cancel_${process.pid}`;
+  const controller = new AbortController();
+  const request = neon(namedUrl(name)).query('select pg_sleep(20)', [], {
+    fetchOptions: { signal: controller.signal },
+  });
+  void request.catch(() => {});
+  try {
+    await waitUntil(async () => await activeCount(name) === 1, 'driver query did not start');
+    controller.abort();
+    await assert.rejects(request, isAbort);
+    await waitUntil(async () => await activeCount(name) === 0, 'aborted driver query stayed active');
+  } finally {
+    controller.abort();
+  }
+});
+
+test('aborting a single statement leaves its write uncommitted', async () => {
+  const table = `barnacle_cancel_single_${process.pid}`;
+  const name = `barnacle_single_cancel_${process.pid}`;
+  await observer.query(`create table ${table} (label text)`);
+  const controller = new AbortController();
+  try {
+    // One statement: the insert is only visible to others once it commits.
+    const request = neon(namedUrl(name)).query(
+      `with written as (insert into ${table} values ('single') returning 1) select pg_sleep(20) from written`,
+      [], { fetchOptions: { signal: controller.signal } });
+    void request.catch(() => {});
+    await waitUntil(async () => await activeCount(name) === 1, 'single statement did not start');
+    controller.abort();
+    await assert.rejects(request, isAbort);
+    await waitUntil(async () => await activeCount(name) === 0, 'aborted statement stayed active');
+    const rows = await observer.query(`select count(*)::int as count from ${table}`);
+    assert.equal(rows[0].count, 0);
+  } finally {
+    controller.abort();
+    await observer.query(`drop table ${table}`);
+  }
+});
+
+test('Neon driver transaction abort rolls back earlier writes', async () => {
+  const table = `barnacle_cancel_tx_${process.pid}`;
+  const name = `barnacle_tx_cancel_${process.pid}`;
+  await observer.query(`create table ${table} (label text)`);
+  const sql = neon(namedUrl(name));
+  const controller = new AbortController();
+  try {
+    const request = sql.transaction(
+      [sql`insert into ${sql.unsafe(table)} values ('batch')`, sql`select pg_sleep(20)`],
+      { fetchOptions: { signal: controller.signal } });
+    void request.catch(() => {});
+    await waitUntil(async () => await activeCount(name) === 1, 'transaction did not reach its second query');
+    controller.abort();
+    await assert.rejects(request, isAbort);
+    await waitUntil(async () => await activeCount(name) === 0, 'aborted transaction stayed active');
+    const rows = await observer.query(`select count(*)::int as count from ${table}`);
+    assert.equal(rows[0].count, 0);
+  } finally {
+    controller.abort();
+    await observer.query(`drop table ${table}`);
+  }
+});
+
 test('PostgreSQL CancelRequest crosses a second WebSocket connection', async () => {
   const name = `barnacle_ws_cancel_${process.pid}`;
   const client = new Client(namedUrl(name));

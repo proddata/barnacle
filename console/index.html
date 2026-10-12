@@ -14,6 +14,7 @@
       <nav class="top-nav" aria-label="Console pages"><a id="nav-workbench" class="top-nav-link active" href="#workbench" aria-current="page">SQL workbench</a><a id="nav-metrics" class="top-nav-link" href="#metrics">Metrics</a></nav>
       <div class="top-actions">
         <span id="connection-badge" class="connection-badge"><span class="status-dot"></span> Not connected</span>
+        <button id="cancel-query" class="cancel-button" type="button" hidden title="Abort the running request. Barnacle cancels the PostgreSQL query.">■ Cancel</button>
         <button id="run-query" class="primary-button" type="button"><span aria-hidden="true">▶</span> <span id="run-label">Run all</span> <kbd>⌘/Ctrl ↵</kbd></button>
       </div>
     </header>
@@ -55,6 +56,9 @@
         <label id="http-batch-field" class="batch-field">HTTP execution
           <span class="batch-control"><input id="http-batch" type="checkbox"> One transaction</span>
         </label>
+        <label id="max-rows-field" title="Sent as Barnacle-Max-Rows. Barnacle returns at most this many rows per query; the query still runs to completion.">Max rows
+          <input id="max-rows" type="number" min="1" step="1" inputmode="numeric" placeholder="No limit">
+        </label>
         <label id="auth-method-field">Require auth
           <select id="auth-method">
             <option value="">Automatic</option>
@@ -92,6 +96,8 @@
             <option value="transaction-delay">Transaction with delay</option>
             <option value="failed-transaction">Failed transaction</option>
             <option value="server-info">Server and session info</option>
+            <option value="cancel-slow-query">Cancel a slow query</option>
+            <option value="limit-result-size">Limit result size</option>
           </select>
           <button id="toggle-explorer" class="subtle-button compact" type="button" title="Toggle database explorer" aria-controls="explorer-panel" aria-expanded="true">Explorer</button>
           <button id="toggle-debug" class="subtle-button compact" type="button" title="Toggle requests panel" aria-controls="debug-panel" aria-expanded="true">Requests</button>
