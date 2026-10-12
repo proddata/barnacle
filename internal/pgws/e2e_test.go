@@ -402,3 +402,62 @@ func TestE2ENonBrowserClientWithBasicAuth(t *testing.T) {
 		t.Fatalf("echo = %q, %v", got, err)
 	}
 }
+
+// What it tests: a client that sends only WebSocket pings (the keep-alive an
+// intermediate relay sends every 30 seconds) while the idle timeout is short.
+// Expected: the session is still closed once the timeout passes, because pings
+// do not count as client activity; only data frames and PostgreSQL output
+// restart the timer. This keeps the idle limit meaningful behind a relay that
+// pings, and matches BARNACLE_WS_IDLE_TIMEOUT's documented meaning. Note that
+// an intermediate proxy's own tunnel timeout does count pings, so keep it
+// longer than this one.
+func TestE2EPingsDoNotKeepAnIdleSessionAlive(t *testing.T) {
+	cfg := &gateway.Config{
+		PGAddr: fakePG(t, md5Login), PGSSLMode: "disable",
+		WSIdleTimeout: 300 * time.Millisecond, WSWriteTimeout: 30 * time.Second,
+		UpstreamSlots: make(chan struct{}, 4), CancelSlots: make(chan struct{}, 4),
+		Metrics: &gateway.Metrics{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v2", New(cfg).Serve)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, "ws"+srv.URL[4:]+"/v2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	// The read loop answers the server's control frames and reports when the
+	// session ends.
+	ended := make(chan time.Time, 1)
+	go func() {
+		for {
+			if _, _, err := c.Read(ctx); err != nil {
+				ended <- time.Now()
+				return
+			}
+		}
+	}()
+	start := time.Now()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case end := <-ended:
+			if elapsed := end.Sub(start); elapsed > 2*time.Second {
+				t.Fatalf("session ended after %v", elapsed)
+			}
+			return
+		case <-ticker.C:
+			// A ping waits for its pong, so bound it: the server may already be gone.
+			pingCtx, pingCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			_ = c.Ping(pingCtx)
+			pingCancel()
+		case <-ctx.Done():
+			t.Fatal("session survived 5s of pings past a 300ms idle timeout")
+		}
+	}
+}

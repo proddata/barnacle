@@ -133,9 +133,11 @@ async function browserResult(port) {
     const pending = new Map();
     socket.addEventListener('message', ({ data }) => {
       const message = JSON.parse(data);
-      if (!message.id) return;
-      pending.get(message.id)?.(message);
+      if (typeof message.id !== 'number') return;
+      const settle = pending.get(message.id);
+      if (typeof settle !== 'function') return;
       pending.delete(message.id);
+      settle(message);
     });
     function command(method, params = {}) {
       const id = ++nextID;
