@@ -22,7 +22,7 @@ Neon-compatible subset of SQL over HTTP for one configured PostgreSQL server.
 export CGO_ENABLED=0
 export GOTOOLCHAIN=local
 export GOCACHE="%{_builddir}/barnacle-go-cache"
-go build -mod=vendor -trimpath -ldflags='-s -w' -o barnacle .
+go build -mod=vendor -trimpath -buildmode=pie -ldflags='-s -w' -o barnacle .
 
 %check
 export GOTOOLCHAIN=local
