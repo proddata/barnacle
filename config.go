@@ -13,6 +13,42 @@ import (
 	"github.com/proddata/barnacle/internal/gateway"
 )
 
+// settingNames is the one list of environment variables the server reads.
+// loadSettings panics on a name missing from it, strict mode treats any other
+// BARNACLE_* name as a typo, and tests keep it in step with the code and with
+// the table in docs/deployment.md.
+var settingNames = []string{
+	"BARNACLE_ALLOWED_ORIGIN",
+	"BARNACLE_HTTP_IDLE_TIMEOUT",
+	"BARNACLE_HTTP_MAX_BUFFERED_MIB",
+	"BARNACLE_HTTP_MAX_MEMORY_MIB",
+	"BARNACLE_HTTP_MAX_REQUEST_MIB",
+	"BARNACLE_HTTP_MAX_RESPONSE_MIB",
+	"BARNACLE_HTTP_MAX_ROW_MIB",
+	"BARNACLE_HTTP_READ_TIMEOUT",
+	"BARNACLE_HTTP_STATEMENT_TIMEOUT",
+	"BARNACLE_LISTEN",
+	"BARNACLE_MAX_CONNECTIONS",
+	"BARNACLE_MAX_HTTP_QUERIES",
+	"BARNACLE_METRICS",
+	"BARNACLE_METRICS_LISTEN",
+	"BARNACLE_PG_ADDR",
+	"BARNACLE_PG_ALLOWED_ADDRS",
+	"BARNACLE_PG_CA_FILE",
+	"BARNACLE_PG_EXTRA_CA_FILE",
+	"BARNACLE_PG_QUERY_EXEC_MODE",
+	"BARNACLE_PG_SSLMODE",
+	"BARNACLE_PG_TLS_SERVER_NAME",
+	"BARNACLE_QUERY_TIMEOUT",
+	"BARNACLE_READY_PG_ADDR",
+	"BARNACLE_TLS_CERT_FILE",
+	"BARNACLE_TLS_KEY_FILE",
+	"BARNACLE_TRUSTED_PROXIES",
+	"BARNACLE_WS_ALLOW_TRUST_AUTH",
+	"BARNACLE_WS_IDLE_TIMEOUT",
+	"BARNACLE_WS_WRITE_TIMEOUT",
+}
+
 // settings is everything main derives from the environment before it opens a
 // listener. Building it has no side effects beyond reading the certificate and
 // CA files, so -check-config can run it against a real deployment's
@@ -114,6 +150,9 @@ func (r *envReader) check(key string, err error) {
 func loadSettings(lookup func(string) string, environ []string, strict bool) (*settings, error) {
 	read := map[string]bool{}
 	getenv := func(key string) string {
+		if !slices.Contains(settingNames, key) {
+			panic("setting " + key + " is missing from settingNames")
+		}
 		read[key] = true
 		return lookup(key)
 	}
@@ -223,12 +262,11 @@ func loadSettings(lookup func(string) string, environ []string, strict bool) (*s
 		Metrics:              &gateway.Metrics{},
 	}
 
-	// Strict runs last so every setting above has been read.
 	if strict {
 		var unknown []string
 		for _, entry := range environ {
 			name, _, _ := strings.Cut(entry, "=")
-			if strings.HasPrefix(name, "BARNACLE_") && !read[name] {
+			if strings.HasPrefix(name, "BARNACLE_") && !slices.Contains(settingNames, name) {
 				unknown = append(unknown, name)
 			}
 		}

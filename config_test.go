@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -113,20 +115,54 @@ func TestLoadSettingsStrictRejectsUnknownNames(t *testing.T) {
 	}
 }
 
-// Every documented setting must count as known, including ones only read on
-// optional paths.
-func TestStrictKnowsEveryDocumentedSetting(t *testing.T) {
+func TestStrictKnowsEverySetting(t *testing.T) {
 	var environ []string
-	for _, name := range []string{
-		"BARNACLE_LISTEN", "BARNACLE_PG_ADDR", "BARNACLE_READY_PG_ADDR", "BARNACLE_PG_ALLOWED_ADDRS",
-		"BARNACLE_PG_SSLMODE", "BARNACLE_PG_QUERY_EXEC_MODE", "BARNACLE_PG_CA_FILE", "BARNACLE_PG_EXTRA_CA_FILE",
-		"BARNACLE_PG_TLS_SERVER_NAME", "BARNACLE_ALLOWED_ORIGIN", "BARNACLE_TRUSTED_PROXIES",
-		"BARNACLE_WS_ALLOW_TRUST_AUTH", "BARNACLE_METRICS", "BARNACLE_METRICS_LISTEN",
-		"BARNACLE_TLS_CERT_FILE", "BARNACLE_TLS_KEY_FILE", "BARNACLE_HTTP_MAX_MEMORY_MIB",
-	} {
+	for _, name := range settingNames {
 		environ = append(environ, name+"=")
 	}
 	if _, err := loadSettings(envMap(nil), environ, true); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Every registered name must be read, so a removed setting cannot linger in
+// the list and be accepted silently by strict mode.
+func TestSettingNamesAreAllRead(t *testing.T) {
+	read := map[string]bool{}
+	_, err := loadSettings(func(key string) string { read[key] = true; return "" }, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range settingNames {
+		if !read[name] {
+			t.Errorf("%s is registered but never read", name)
+		}
+	}
+	if !slices.IsSorted(settingNames) {
+		t.Error("settingNames must stay sorted")
+	}
+}
+
+// The reference table in docs/deployment.md must list exactly the registered
+// settings.
+func TestSettingNamesMatchDeploymentDocs(t *testing.T) {
+	doc, err := os.ReadFile("docs/deployment.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := map[string]bool{}
+	for _, line := range strings.Split(string(doc), "\n") {
+		if row, ok := strings.CutPrefix(line, "| `BARNACLE_"); ok {
+			documented["BARNACLE_"+strings.SplitN(row, "`", 2)[0]] = true
+		}
+	}
+	for _, name := range settingNames {
+		if !documented[name] {
+			t.Errorf("%s is not in the docs/deployment.md settings table", name)
+		}
+		delete(documented, name)
+	}
+	for name := range documented {
+		t.Errorf("docs/deployment.md documents %s, which the server does not read", name)
 	}
 }
