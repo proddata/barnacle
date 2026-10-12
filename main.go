@@ -8,139 +8,37 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/proddata/barnacle/internal/gateway"
 	"github.com/proddata/barnacle/internal/pgws"
 	"github.com/proddata/barnacle/internal/sqlhttp"
 )
 
-func env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
 func main() {
-	timeout := durationEnv("BARNACLE_QUERY_TIMEOUT", "10m", 1)
-	statementTimeout := durationEnv("BARNACLE_HTTP_STATEMENT_TIMEOUT", "60s", time.Millisecond)
-	httpReadTimeout := durationEnv("BARNACLE_HTTP_READ_TIMEOUT", "15s", 1)
-	// Give the SQL handler's request deadline time to finish before the HTTP
-	// server cuts off its response write.
-	httpWriteTimeout := timeout + time.Second
-	if httpWriteTimeout <= timeout {
-		exitf("BARNACLE_QUERY_TIMEOUT is too large")
-	}
-	httpIdleTimeout := durationEnv("BARNACLE_HTTP_IDLE_TIMEOUT", "60s", 1)
-	wsIdleTimeout := durationEnv("BARNACLE_WS_IDLE_TIMEOUT", "30m", 1)
-	wsWriteTimeout := durationEnv("BARNACLE_WS_WRITE_TIMEOUT", "30s", 1)
-	maxConnections := positiveIntEnv("BARNACLE_MAX_CONNECTIONS", 32)
-	maxHTTPQueries := positiveIntEnv("BARNACLE_MAX_HTTP_QUERIES", 8)
-	if maxHTTPQueries > maxConnections {
-		exitf("invalid BARNACLE_MAX_HTTP_QUERIES")
-	}
-	maxHTTPRequestMiB := mibEnv("BARNACLE_HTTP_MAX_REQUEST_MIB", 10)
-	maxHTTPRowMiB := mibEnv("BARNACLE_HTTP_MAX_ROW_MIB", 8)
-	maxHTTPBufferedMiB := mibEnv("BARNACLE_HTTP_MAX_BUFFERED_MIB", 10)
-	maxHTTPResponseMiB := mibEnv("BARNACLE_HTTP_MAX_RESPONSE_MIB", 2048)
-	// An explicit setting wins; otherwise follow the memory limit the service
-	// runs under, so raising that limit raises the budget with it.
-	httpMemoryBytes, httpMemorySource := gateway.DefaultMemoryBudget(96 << 20)
-	if os.Getenv("BARNACLE_HTTP_MAX_MEMORY_MIB") != "" {
-		httpMemoryBytes, httpMemorySource = int64(mibEnv("BARNACLE_HTTP_MAX_MEMORY_MIB", 96))<<20, "BARNACLE_HTTP_MAX_MEMORY_MIB"
-	}
-	allowedAddrs, err := gateway.ParseAllowedPGAddrs(os.Getenv("BARNACLE_PG_ALLOWED_ADDRS"))
+	checkConfig := flag.Bool("check-config", false, "validate the BARNACLE_* environment and exit without listening")
+	flag.Parse()
+	s, err := loadSettings(os.Getenv)
 	if err != nil {
-		slog.Error("invalid PostgreSQL routing configuration", "error", err)
+		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
-	defaultPGAddr := os.Getenv("BARNACLE_PG_ADDR")
-	if defaultPGAddr == "" && len(allowedAddrs) == 0 {
-		defaultPGAddr = "127.0.0.1:5432"
+	if *checkConfig {
+		fmt.Println("configuration ok")
+		return
 	}
-	if defaultPGAddr != "" {
-		defaultPGAddr, err = gateway.CanonicalPGAddr(defaultPGAddr)
-		if err != nil {
-			slog.Error("invalid BARNACLE_PG_ADDR", "error", err)
-			os.Exit(1)
-		}
-		if len(allowedAddrs) > 0 {
-			_, anyAllowed := allowedAddrs["*"]
-			if _, ok := allowedAddrs[defaultPGAddr]; !ok && !anyAllowed {
-				slog.Error("BARNACLE_PG_ADDR must appear in BARNACLE_PG_ALLOWED_ADDRS when routing is enabled")
-				os.Exit(1)
-			}
-		}
-	}
-	readyPGAddr := os.Getenv("BARNACLE_READY_PG_ADDR")
-	if readyPGAddr != "" {
-		readyPGAddr, err = gateway.CanonicalPGAddr(readyPGAddr)
-		if err != nil {
-			slog.Error("invalid BARNACLE_READY_PG_ADDR", "error", err)
-			os.Exit(1)
-		}
-	}
-	pgSSLMode := choiceEnv("BARNACLE_PG_SSLMODE", "require", "require", "disable")
-	pgQueryExecMode := choiceEnv("BARNACLE_PG_QUERY_EXEC_MODE", "exec", "exec", "cache_describe", "cache_statement")
-	pgRootCAs, err := gateway.LoadPGRootCAs(os.Getenv("BARNACLE_PG_CA_FILE"), os.Getenv("BARNACLE_PG_EXTRA_CA_FILE"))
-	if err != nil {
-		slog.Error("invalid PostgreSQL CA file", "error", err)
-		os.Exit(1)
-	}
-	allowedOrigins, err := gateway.ParseAllowedOrigins(os.Getenv("BARNACLE_ALLOWED_ORIGIN"))
-	if err != nil {
-		slog.Error("invalid BARNACLE_ALLOWED_ORIGIN", "error", err)
-		os.Exit(1)
-	}
-	trustedProxies, err := gateway.ParseTrustedProxies(os.Getenv("BARNACLE_TRUSTED_PROXIES"))
-	if err != nil {
-		slog.Error("invalid BARNACLE_TRUSTED_PROXIES", "error", err)
-		os.Exit(1)
-	}
-	// These channels bound concurrent database work across both transports.
-	// Cancellation uses a separate, smaller budget because it opens a new
-	// PostgreSQL connection to stop abandoned WebSocket queries.
-	cfg := gateway.Config{
-		Listen:               env("BARNACLE_LISTEN", ":8080"),
-		PGAddr:               defaultPGAddr,
-		ReadyPGAddr:          readyPGAddr,
-		PGAllowedAddrs:       allowedAddrs,
-		PGSSLMode:            pgSSLMode,
-		PGQueryExecMode:      pgQueryExecMode,
-		AllowTrustLogin:      boolEnv("BARNACLE_WS_ALLOW_TRUST_AUTH", false),
-		PGTLSServerName:      os.Getenv("BARNACLE_PG_TLS_SERVER_NAME"),
-		PGRootCAs:            pgRootCAs,
-		AllowedOrigins:       allowedOrigins,
-		TrustedProxies:       trustedProxies,
-		QueryTimeout:         timeout,
-		StatementTimeout:     statementTimeout,
-		WSIdleTimeout:        wsIdleTimeout,
-		WSWriteTimeout:       wsWriteTimeout,
-		UpstreamSlots:        make(chan struct{}, maxConnections),
-		CancelSlots:          make(chan struct{}, min(8, maxConnections)),
-		HTTPSlots:            make(chan struct{}, maxHTTPQueries),
-		ReadySlots:           make(chan struct{}, 1),
-		MaxHTTPRequestBytes:  int64(maxHTTPRequestMiB) << 20,
-		MaxHTTPRowBytes:      int64(maxHTTPRowMiB) << 20,
-		MaxHTTPBufferedBytes: int64(maxHTTPBufferedMiB) << 20,
-		MaxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
-		HTTPMemory:           gateway.NewMemoryBudget(httpMemoryBytes),
-		Metrics:              &gateway.Metrics{},
-	}
+	cfg := s.cfg
+	httpMemoryBytes, httpMemorySource := s.httpMemoryBytes, s.httpMemorySource
+	metricsEnabled, metricsListen := s.metricsEnabled, s.metricsListen
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /readyz", cfg.Ready)
@@ -148,13 +46,6 @@ func main() {
 	wsHandler := pgws.New(&cfg)
 	mux.HandleFunc("POST /sql", cfg.Metrics.MeasureSQL(sqlhttp.Gzip(sqlHandler.Serve)))
 	mux.HandleFunc("OPTIONS /sql", cfg.Preflight)
-	metricsSetting := os.Getenv("BARNACLE_METRICS")
-	if metricsSetting != "" && !strings.EqualFold(metricsSetting, "true") && !strings.EqualFold(metricsSetting, "false") {
-		slog.Error("BARNACLE_METRICS must be true or false")
-		os.Exit(1)
-	}
-	metricsEnabled := metricsSetting == "" || strings.EqualFold(metricsSetting, "true")
-	metricsListen := os.Getenv("BARNACLE_METRICS_LISTEN")
 	if metricsEnabled && metricsListen == "" {
 		mux.HandleFunc("GET /metrics", cfg.Metrics.Serve)
 	} else {
@@ -164,17 +55,13 @@ func main() {
 	server := &http.Server{
 		Addr: cfg.Listen, Handler: mux,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       httpReadTimeout,
-		WriteTimeout:      httpWriteTimeout,
-		IdleTimeout:       httpIdleTimeout,
+		ReadTimeout:       s.httpReadTimeout,
+		WriteTimeout:      s.httpWriteTimeout,
+		IdleTimeout:       s.httpIdleTimeout,
 		MaxHeaderBytes:    32 << 10,
 	}
-	var certificateReloader *publicCertificateReloader
-	server.TLSConfig, certificateReloader, err = publicTLSConfig(os.Getenv("BARNACLE_TLS_CERT_FILE"), os.Getenv("BARNACLE_TLS_KEY_FILE"))
-	if err != nil {
-		slog.Error("invalid public TLS configuration", "error", err)
-		os.Exit(1)
-	}
+	server.TLSConfig = s.tlsConfig
+	certificateReloader := s.certificateReload
 	mainListener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		slog.Error("failed to listen", "address", cfg.Listen, "error", err)
@@ -194,9 +81,9 @@ func main() {
 		metricsServer = &http.Server{
 			Handler:           metricsMux,
 			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       httpReadTimeout,
-			WriteTimeout:      httpWriteTimeout,
-			IdleTimeout:       httpIdleTimeout,
+			ReadTimeout:       s.httpReadTimeout,
+			WriteTimeout:      s.httpWriteTimeout,
+			IdleTimeout:       s.httpIdleTimeout,
 			MaxHeaderBytes:    32 << 10,
 		}
 	}
@@ -346,58 +233,4 @@ func (r *publicCertificateReloader) reload() {
 	r.certificate.Store(&certificate)
 	r.certHash, r.keyHash = certHash, keyHash
 	slog.Info("reloaded public TLS certificate and key")
-}
-
-func exitf(message string, args ...any) {
-	slog.Error(message, args...)
-	os.Exit(1)
-}
-
-// durationEnv exits when the value does not parse or is below min.
-func durationEnv(key, fallback string, min time.Duration) time.Duration {
-	value, err := time.ParseDuration(env(key, fallback))
-	if err != nil || value < min {
-		exitf("invalid " + key)
-	}
-	return value
-}
-
-// boolEnv accepts only true or false so a typo cannot silently relax a policy.
-func boolEnv(key string, fallback bool) bool {
-	switch value := strings.ToLower(os.Getenv(key)); value {
-	case "":
-		return fallback
-	case "true":
-		return true
-	case "false":
-		return false
-	default:
-		exitf(key + " must be true or false")
-		return fallback
-	}
-}
-
-func choiceEnv(key, fallback string, choices ...string) string {
-	value := env(key, fallback)
-	if !slices.Contains(choices, value) {
-		exitf(key + " must be " + strings.Join(choices, ", "))
-	}
-	return value
-}
-
-func positiveIntEnv(key string, fallback int) int {
-	value, err := strconv.Atoi(env(key, strconv.Itoa(fallback)))
-	if err != nil || value <= 0 {
-		exitf("invalid " + key)
-	}
-	return value
-}
-
-// mibEnv rejects values whose byte count would overflow int64.
-func mibEnv(key string, fallback int) int {
-	value := positiveIntEnv(key, fallback)
-	if int64(value) > math.MaxInt64/(1<<20) {
-		exitf("invalid " + key)
-	}
-	return value
 }

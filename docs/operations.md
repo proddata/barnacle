@@ -66,6 +66,10 @@ sudo systemctl restart barnacle
 
 Also adjust `GOMEMLIMIT` in `/etc/sysconfig/barnacle` when changing `MemoryMax`, and keep the two in proportion (`GOMEMLIMIT` about 5/8 of `MemoryMax`). When `BARNACLE_HTTP_MAX_MEMORY_MIB` is unset, Barnacle derives the heap budget for `/sql` request bodies and buffered results as `GOMEMLIMIT` less 64 MiB (96 MiB for the packaged unit), so raising `MemoryMax` and `GOMEMLIMIT` together raises it, and larger services give a bigger share of their limit to the budget; the startup log states the value. `BARNACLE_MAX_CONNECTIONS=32` limits the PostgreSQL backends Barnacle can create across both transports; tune it below PostgreSQL's available connection budget. PostgreSQL still needs its own work memory and statement timeout settings.
 
+## Validating configuration
+
+`barnacle -check-config` reads the same `BARNACLE_*` environment as the service, validates every setting (including certificate and CA files), prints `configuration ok` and exits 0 without opening a listener. On invalid input it logs every problem at once and exits 1. A platform that generates the environment can run it in a test or as a unit `ExecStartPre=` to catch a bad setting before a restart. Unknown `BARNACLE_*` names are not rejected.
+
 ## Migrating an installed Hermit service
 
 Barnacle uses a separate package and systemd unit. Stop and disable `hermit.service` before starting `barnacle.service` on the same listen address. Copy the deployment settings from `/etc/default/hermit` or `/etc/sysconfig/hermit` into the Barnacle environment file, change each `HERMIT_` prefix to `BARNACLE_`, and review certificate, key, and service drop-in paths. Keep the old package and configuration until the new service passes deployment checks. The database and its roles do not need renaming.
