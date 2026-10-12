@@ -17,6 +17,7 @@ type Metrics struct {
 	sqlDurationSeconds   float64
 	sqlLatency           [6]uint64
 	httpLimitRejects     uint64
+	memoryRejects        uint64
 	upstreamRejects      uint64
 	upstreamFailures     uint64
 	streamInterruptions  [4]uint64
@@ -38,6 +39,13 @@ func (m *Metrics) RejectHTTPQuery() {
 	if m != nil {
 		m.mu.Lock()
 		m.httpLimitRejects++
+		m.mu.Unlock()
+	}
+}
+func (m *Metrics) RejectHTTPMemory() {
+	if m != nil {
+		m.mu.Lock()
+		m.memoryRejects++
 		m.mu.Unlock()
 	}
 }
@@ -155,6 +163,7 @@ func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	sqlDurationSeconds := m.sqlDurationSeconds
 	sqlLatency := m.sqlLatency
 	httpLimitRejects := m.httpLimitRejects
+	memoryRejects := m.memoryRejects
 	upstreamRejects := m.upstreamRejects
 	upstreamFailures := m.upstreamFailures
 	streamInterruptions := m.streamInterruptions
@@ -166,7 +175,7 @@ func (m *Metrics) Serve(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_http_sql_active HTTP SQL requests currently in progress.\n# TYPE barnacle_http_sql_active gauge\nbarnacle_http_sql_active %d\n", httpSQLActive)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_sql_requests_total Completed HTTP SQL requests since startup.\n# TYPE barnacle_sql_requests_total counter\nbarnacle_sql_requests_total %d\n", sqlRequests)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_sql_errors_total HTTP SQL responses with status 400 or higher.\n# TYPE barnacle_sql_errors_total counter\nbarnacle_sql_errors_total %d\n", sqlErrors)
-	_, _ = fmt.Fprintf(w, "# HELP barnacle_limit_rejections_total Requests rejected by a configured concurrency limit.\n# TYPE barnacle_limit_rejections_total counter\nbarnacle_limit_rejections_total{limit=\"http_queries\"} %d\nbarnacle_limit_rejections_total{limit=\"upstream_connections\"} %d\n", httpLimitRejects, upstreamRejects)
+	_, _ = fmt.Fprintf(w, "# HELP barnacle_limit_rejections_total Requests rejected by a configured concurrency limit.\n# TYPE barnacle_limit_rejections_total counter\nbarnacle_limit_rejections_total{limit=\"http_queries\"} %d\nbarnacle_limit_rejections_total{limit=\"upstream_connections\"} %d\nbarnacle_limit_rejections_total{limit=\"http_memory\"} %d\n", httpLimitRejects, upstreamRejects, memoryRejects)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_upstream_connection_failures_total Failed PostgreSQL connection attempts.\n# TYPE barnacle_upstream_connection_failures_total counter\nbarnacle_upstream_connection_failures_total %d\n", upstreamFailures)
 	_, _ = fmt.Fprintf(w, "# HELP barnacle_websocket_login_rejections_total WebSocket sessions closed before PostgreSQL login completed.\n# TYPE barnacle_websocket_login_rejections_total counter\nbarnacle_websocket_login_rejections_total{reason=\"unauthenticated\"} %d\nbarnacle_websocket_login_rejections_total{reason=\"malformed\"} %d\n", loginRejections[0], loginRejections[1])
 	_, _ = fmt.Fprintln(w, "# HELP barnacle_sql_stream_interruptions_total HTTP SQL result streams interrupted after streaming began.\n# TYPE barnacle_sql_stream_interruptions_total counter")

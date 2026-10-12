@@ -149,6 +149,7 @@ The development Compose file passes these settings from shell variables or `.env
 | `BARNACLE_HTTP_MAX_REQUEST_MIB` | `10` | Maximum `/sql` JSON request body in MiB |
 | `BARNACLE_HTTP_MAX_ROW_MIB` | `8` | Maximum raw PostgreSQL field data in one HTTP row |
 | `BARNACLE_HTTP_MAX_BUFFERED_MIB` | `10` | Buffer limit for a single query or batch result |
+| `BARNACLE_HTTP_MAX_MEMORY_MIB` | derived | Estimated heap that `/sql` request bodies and buffered results may hold at once, across all requests. Unset, it is `GOMEMLIMIT` less 64 MiB (96 MiB for the packaged unit), or 96 MiB when `GOMEMLIMIT` is unset; see [limits](decisions/sql-http-limits.md#memory-budget) and the [decision record](decisions/memory-limits.md) |
 | `BARNACLE_HTTP_MAX_RESPONSE_MIB` | `2048` | Maximum uncompressed HTTP result JSON bytes (2 GiB); also applies to streaming |
 | `BARNACLE_ALLOWED_ORIGIN` | empty | Comma-separated exact browser origins |
 | `BARNACLE_TRUSTED_PROXIES` | empty | Immediate reverse-proxy IPs or CIDRs allowed to set `X-Forwarded-Proto` |

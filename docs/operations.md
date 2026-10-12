@@ -64,7 +64,7 @@ Then restart the service:
 sudo systemctl restart barnacle
 ```
 
-Also adjust `GOMEMLIMIT` in `/etc/sysconfig/barnacle` when changing `MemoryMax`. If repeated failures hit the start limit, fix the cause and run `sudo systemctl reset-failed barnacle && sudo systemctl start barnacle`. `BARNACLE_MAX_CONNECTIONS=32` limits the PostgreSQL backends Barnacle can create across both transports; tune it below PostgreSQL's available connection budget. PostgreSQL still needs its own work memory and statement timeout settings.
+Also adjust `GOMEMLIMIT` in `/etc/sysconfig/barnacle` when changing `MemoryMax`, and keep the two in proportion (`GOMEMLIMIT` about 5/8 of `MemoryMax`). When `BARNACLE_HTTP_MAX_MEMORY_MIB` is unset, Barnacle derives the heap budget for `/sql` request bodies and buffered results as `GOMEMLIMIT` less 64 MiB (96 MiB for the packaged unit), so raising `MemoryMax` and `GOMEMLIMIT` together raises it, and larger services give a bigger share of their limit to the budget; the startup log states the value. `BARNACLE_MAX_CONNECTIONS=32` limits the PostgreSQL backends Barnacle can create across both transports; tune it below PostgreSQL's available connection budget. PostgreSQL still needs its own work memory and statement timeout settings.
 
 ## Migrating an installed Hermit service
 

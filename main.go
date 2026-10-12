@@ -57,6 +57,12 @@ func main() {
 	maxHTTPRowMiB := mibEnv("BARNACLE_HTTP_MAX_ROW_MIB", 8)
 	maxHTTPBufferedMiB := mibEnv("BARNACLE_HTTP_MAX_BUFFERED_MIB", 10)
 	maxHTTPResponseMiB := mibEnv("BARNACLE_HTTP_MAX_RESPONSE_MIB", 2048)
+	// An explicit setting wins; otherwise follow the memory limit the service
+	// runs under, so raising that limit raises the budget with it.
+	httpMemoryBytes, httpMemorySource := gateway.DefaultMemoryBudget(96 << 20)
+	if os.Getenv("BARNACLE_HTTP_MAX_MEMORY_MIB") != "" {
+		httpMemoryBytes, httpMemorySource = int64(mibEnv("BARNACLE_HTTP_MAX_MEMORY_MIB", 96))<<20, "BARNACLE_HTTP_MAX_MEMORY_MIB"
+	}
 	allowedAddrs, err := gateway.ParseAllowedPGAddrs(os.Getenv("BARNACLE_PG_ALLOWED_ADDRS"))
 	if err != nil {
 		slog.Error("invalid PostgreSQL routing configuration", "error", err)
@@ -132,6 +138,7 @@ func main() {
 		MaxHTTPRowBytes:      int64(maxHTTPRowMiB) << 20,
 		MaxHTTPBufferedBytes: int64(maxHTTPBufferedMiB) << 20,
 		MaxHTTPResponseBytes: int64(maxHTTPResponseMiB) << 20,
+		HTTPMemory:           gateway.NewMemoryBudget(httpMemoryBytes),
 		Metrics:              &gateway.Metrics{},
 	}
 	mux := http.NewServeMux()
@@ -225,6 +232,7 @@ func main() {
 	} else {
 		go func() { serveResults <- server.Serve(mainListener) }()
 	}
+	slog.Info("buffered HTTP result memory budget", "mib", httpMemoryBytes>>20, "source", httpMemorySource)
 	slog.Info("barnacle listening", "address", mainListener.Addr().String(), "postgres", cfg.PGAddr, "tls", server.TLSConfig != nil)
 	if metricsServer != nil {
 		go func() { serveResults <- metricsServer.Serve(metricsListener) }()

@@ -58,9 +58,11 @@ func canStream(rows pgx.Rows, types *pgtype.Map, rawText bool) bool {
 
 // streamSingle checks the first row before sending HTTP 200. Once headers are
 // sent, a later database or size error can only interrupt the JSON stream.
-func streamSingle(w http.ResponseWriter, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes, maxResponseBytes int64) error {
+func streamSingle(w http.ResponseWriter, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes, maxResponseBytes int64, lease *memoryLease, refuse func(http.ResponseWriter, error) bool) error {
 	defer rows.Close()
-	fields := fieldsFromDescriptions(rows.FieldDescriptions())
+	descriptions := rows.FieldDescriptions()
+	fields := fieldsFromDescriptions(descriptions)
+	kinds := cellKinds(descriptions, types, rawText)
 	firstRow := rows.Next()
 	if !firstRow && rows.Err() != nil {
 		dbError(w, rows.Err())
@@ -69,6 +71,18 @@ func streamSingle(w http.ResponseWriter, rows pgx.Rows, types *pgtype.Map, array
 	if firstRow && !rowWithinLimit(rows.RawValues(), maxRowBytes) {
 		apiError(w, http.StatusRequestEntityTooLarge, errHTTPResultTooLarge)
 		return nil
+	}
+	// Reserve the first row before any header is sent, so a refusal can still be
+	// a clean error response; later refusals can only interrupt the stream.
+	var rowCost int64
+	if firstRow {
+		rowCost = streamRowCost(rows.RawValues(), kinds)
+		if err := lease.grow(rowCost); err != nil {
+			if refuse(w, err) {
+				return nil
+			}
+			return err
+		}
 	}
 	out := &responseBudget{writer: w, max: maxResponseBytes}
 	w.Header().Set("Content-Type", "application/json")
@@ -95,7 +109,16 @@ func streamSingle(w http.ResponseWriter, rows pgx.Rows, types *pgtype.Map, array
 				return err
 			}
 		}
-		if err = streamRow(out, rows.RawValues(), fields, types, arrayMode, rawText); err != nil {
+		if rowIndex > 0 {
+			if rowCost = streamRowCost(rows.RawValues(), kinds); rowCost > 0 {
+				if err = lease.grow(rowCost); err != nil {
+					return err
+				}
+			}
+		}
+		err = streamRow(out, rows.RawValues(), fields, types, arrayMode, rawText)
+		lease.shrink(rowCost)
+		if err != nil {
 			return err
 		}
 		if rowIndex%64 == 0 {

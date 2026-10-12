@@ -23,6 +23,9 @@ type Config struct {
 	MaxHTTPRequestBytes, MaxHTTPRowBytes, MaxHTTPBufferedBytes, MaxHTTPResponseBytes int64
 	Metrics                                                                          *Metrics
 
+	// HTTPMemory bounds estimated heap held by buffered HTTP results at once.
+	HTTPMemory *MemoryBudget
+
 	// AllowTrustLogin lets a WebSocket session proceed when PostgreSQL accepts
 	// the login without asking for a credential.
 	AllowTrustLogin bool

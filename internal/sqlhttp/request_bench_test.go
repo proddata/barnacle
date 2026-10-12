@@ -27,11 +27,11 @@ func BenchmarkRequestDecode(b *testing.B) {
 			b.SetBytes(int64(len(body)))
 			for b.Loop() {
 				req.Body = ioNopCloserReader(body)
-				buffered, err := readRequestBody(nil, req, 10<<20)
+				buffered, err := readRequestBody(nil, req, 10<<20, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
-				parsed, err := decodeRequest(req, buffered)
+				parsed, err := decodeRequest(req, buffered, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -61,11 +61,11 @@ func BenchmarkRejectComplexRequest(b *testing.B) {
 	b.SetBytes(int64(len(body)))
 	for b.Loop() {
 		req.Body = ioNopCloserReader(body)
-		buffered, err := readRequestBody(nil, req, 10<<20)
+		buffered, err := readRequestBody(nil, req, 10<<20, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
-		if _, err := decodeRequest(req, buffered); err != errRequestComplexity {
+		if _, err := decodeRequest(req, buffered, nil); err != errRequestComplexity {
 			b.Fatalf("expected complexity rejection: %v", err)
 		}
 	}
