@@ -142,7 +142,8 @@ jobs:
           test "$(find dist -maxdepth 1 -name 'barnacle-*.rpm' | wc -l)" -eq 2
           test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 9
           cd dist
-          find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
+          # The shell creates SHA256SUMS before find runs, so leave it out of the list.
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
           sha256sum -c SHA256SUMS
       - name: Publish release assets
         env:
