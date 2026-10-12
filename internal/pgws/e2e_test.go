@@ -3,6 +3,7 @@ package pgws
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -289,5 +290,174 @@ func TestE2EFailedLoginCountedOncePerSession(t *testing.T) {
 	}
 	if count := loginFailureCount(t, h, "websocket"); count != "1" {
 		t.Fatalf("websocket login failures = %s, want 1", count)
+	}
+}
+
+// startGatewayWithBackend serves /v2 in front of a fake PostgreSQL listener
+// whose behavior each test supplies through handle. Unlike fakePG, which always
+// echoes, this lets a test end the backend session in a chosen way.
+func startGatewayWithBackend(t testing.TB, handle func(net.Conn)) *httptest.Server {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go handle(c)
+		}
+	}()
+	cfg := &gateway.Config{
+		PGAddr: l.Addr().String(), PGSSLMode: "disable",
+		WSIdleTimeout: time.Minute, WSWriteTimeout: 30 * time.Second,
+		UpstreamSlots: make(chan struct{}, 4), CancelSlots: make(chan struct{}, 4),
+		Metrics: &gateway.Metrics{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v2", New(cfg).Serve)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// closeStatus reads from the client until the WebSocket ends and returns the
+// close code and reason it received. A code of -1 means the connection dropped
+// without a close frame, which clients treat as an abnormal closure (1006).
+func closeStatus(t testing.TB, c *websocket.Conn) (websocket.StatusCode, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		if _, _, err := c.Read(ctx); err != nil {
+			var closeErr websocket.CloseError
+			if errors.As(err, &closeErr) {
+				return closeErr.Code, closeErr.Reason
+			}
+			return -1, err.Error()
+		}
+	}
+}
+
+// What it tests: PostgreSQL ends the session cleanly (it closes the TCP
+// connection after the login bytes, as it does after a client Terminate).
+// Expected: Barnacle sends a WebSocket close frame with code 1000 rather than
+// dropping the connection. A proxy relaying this session, such as the one in
+// front of the PostgreSQL editor, can then tell a finished session from a
+// failed one instead of seeing an abnormal closure.
+func TestE2EPostgresCloseIsReportedAsNormalClosure(t *testing.T) {
+	srv := startGatewayWithBackend(t, func(c net.Conn) {
+		c.Write(md5Login)
+		time.Sleep(50 * time.Millisecond)
+		c.Close()
+	})
+	_, c := dial(t, srv)
+	defer c.CloseNow()
+	if code, reason := closeStatus(t, c); code != websocket.StatusNormalClosure {
+		t.Fatalf("close = %d %q, want 1000", code, reason)
+	}
+}
+
+// What it tests: PostgreSQL's connection dies abruptly (a TCP reset, as when the
+// backend is killed). Expected: close code 1011 with the fixed reason
+// "upstream connection lost", so clients see a failure, and no network error
+// text from the upstream reaches them.
+func TestE2EPostgresConnectionResetIsReportedAsInternalError(t *testing.T) {
+	srv := startGatewayWithBackend(t, func(c net.Conn) {
+		c.Write(md5Login)
+		time.Sleep(50 * time.Millisecond)
+		c.(*net.TCPConn).SetLinger(0) // Closing now sends a reset.
+		c.Close()
+	})
+	_, c := dial(t, srv)
+	defer c.CloseNow()
+	if code, reason := closeStatus(t, c); code != websocket.StatusInternalError || reason != "upstream connection lost" {
+		t.Fatalf("close = %d %q, want 1011 without detail", code, reason)
+	}
+}
+
+// What it tests: a non-browser client, like the PostgreSQL editor's server-side
+// relay, connects with no Origin header and sends HTTP Basic credentials for
+// the ingress in front of Barnacle. Expected: the upgrade is accepted, the
+// credentials are not forwarded to PostgreSQL (the login bytes and the echo
+// come back unchanged), and the session works normally. Barnacle must keep
+// ignoring that header, since PostgreSQL does the authenticating.
+func TestE2ENonBrowserClientWithBasicAuth(t *testing.T) {
+	srv, _ := startGateway(t)
+	ctx := context.Background()
+	header := http.Header{"Authorization": {"Basic YWRtaW46c2VjcmV0"}}
+	c, _, err := websocket.Dial(ctx, "ws"+srv.URL[4:]+"/v2", &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetReadLimit(-1)
+	nc := websocket.NetConn(ctx, c, websocket.MessageBinary)
+	defer c.CloseNow()
+	readLogin(t, nc, md5Login)
+	nc.Write([]byte("ping"))
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(nc, got); err != nil || string(got) != "ping" {
+		t.Fatalf("echo = %q, %v", got, err)
+	}
+}
+
+// What it tests: a client that sends only WebSocket pings (the keep-alive an
+// intermediate relay sends every 30 seconds) while the idle timeout is short.
+// Expected: the session is still closed once the timeout passes, because pings
+// do not count as client activity; only data frames and PostgreSQL output
+// restart the timer. This keeps the idle limit meaningful behind a relay that
+// pings, and matches BARNACLE_WS_IDLE_TIMEOUT's documented meaning. Note that
+// an intermediate proxy's own tunnel timeout does count pings, so keep it
+// longer than this one.
+func TestE2EPingsDoNotKeepAnIdleSessionAlive(t *testing.T) {
+	cfg := &gateway.Config{
+		PGAddr: fakePG(t, md5Login), PGSSLMode: "disable",
+		WSIdleTimeout: 300 * time.Millisecond, WSWriteTimeout: 30 * time.Second,
+		UpstreamSlots: make(chan struct{}, 4), CancelSlots: make(chan struct{}, 4),
+		Metrics: &gateway.Metrics{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v2", New(cfg).Serve)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, "ws"+srv.URL[4:]+"/v2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	// The read loop answers the server's control frames and reports when the
+	// session ends.
+	ended := make(chan time.Time, 1)
+	go func() {
+		for {
+			if _, _, err := c.Read(ctx); err != nil {
+				ended <- time.Now()
+				return
+			}
+		}
+	}()
+	start := time.Now()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case end := <-ended:
+			if elapsed := end.Sub(start); elapsed > 2*time.Second {
+				t.Fatalf("session ended after %v", elapsed)
+			}
+			return
+		case <-ticker.C:
+			// A ping waits for its pong, so bound it: the server may already be gone.
+			pingCtx, pingCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			_ = c.Ping(pingCtx)
+			pingCancel()
+		case <-ctx.Done():
+			t.Fatal("session survived 5s of pings past a 300ms idle timeout")
+		}
 	}
 }
