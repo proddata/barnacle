@@ -9,7 +9,7 @@ Barnacle passes credentials to PostgreSQL. It does not validate access tokens or
 | HTTP Bearer | `Authorization: Bearer <token>`; URL supplies user and database | OAuth SASL only |
 | WebSocket | PostgreSQL wire messages inside binary frames | The WebSocket client authenticates with PostgreSQL |
 
-For HTTP bearer requests, Barnacle gives pgx the token through `OAuthTokenProvider`, clears the PostgreSQL password, and requires the `oauth` authentication method. A PostgreSQL route offering only password, SCRAM, MD5, or `trust` returns HTTP `502` with `BARNACLE_UPSTREAM_OAUTH_UNAVAILABLE`. The token is never retried as a password. PostgreSQL must have an OAuth validator that checks the token and authorizes the requested role. PostgreSQL 18 requires a separately configured validator module; Barnacle does not provide one. The local Compose PostgreSQL 17 SCRAM setup does not accept bearer requests.
+For HTTP bearer requests, Barnacle gives pgx the token through `OAuthTokenProvider`, clears the PostgreSQL password, and requires the `oauth` authentication method. A PostgreSQL route offering only password, SCRAM, MD5, or `trust` returns HTTP `502` with `BARNACLE_UPSTREAM_OAUTH_UNAVAILABLE`. The token is never retried as a password. PostgreSQL must have an OAuth validator that checks the token and authorizes the requested role. PostgreSQL 18 requires a separately configured validator module; Barnacle does not provide one. The local Compose PostgreSQL 18 SCRAM setup does not accept bearer requests.
 
 For example, once PostgreSQL OAuth is configured:
 
