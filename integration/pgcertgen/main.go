@@ -43,7 +43,7 @@ func main() {
 	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
 	check(err)
 	write("server.key", pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER}), 0600)
-	check(os.Chown(filepath.Join(dir, "server.key"), 70, 70)) // postgres:17-alpine user
+	check(os.Chown(filepath.Join(dir, "server.key"), 70, 70)) // postgres:18-alpine user
 	write("server.crt", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}), 0644)
 	write("ca.crt", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0644)
 }
