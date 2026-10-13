@@ -28,6 +28,10 @@ jobs:
           test "$version" = "$(awk '/^Version:/ { print $2; exit }' packaging/rpm/barnacle.spec)"
           echo "number=$version" >> "$GITHUB_OUTPUT"
 
+  validation:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
   sources:
     needs: version
     runs-on: ubuntu-24.04
@@ -116,7 +120,7 @@ jobs:
           path: dist/barnacle-*.rpm
 
   publish:
-    needs: [version, sources, binaries-packages-image, rpm]
+    needs: [version, validation, sources, binaries-packages-image, rpm]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

@@ -14,6 +14,14 @@ sudo systemctl enable --now barnacle
 
 The package supplies the same basic systemd hardening as the Fedora service below. Set `BARNACLE_PG_ADDR` and the PostgreSQL CA for the intended deployment before serving traffic.
 
+Both packages set `GOMEMLIMIT=160MiB` alongside the unit's `MemoryMax=256M`. When upgrading an existing installation, check the new package configuration against your retained `/etc/default/barnacle` or `/etc/sysconfig/barnacle` and carry over this setting if it is missing.
+
+Debian package upgrades reload systemd's unit definitions. The running process
+continues to use the previous binary until it is restarted. Schedule the restart
+with your rollout so active sessions can drain, then run
+`sudo systemctl restart barnacle` and check readiness and the service journal. Installing a new `.deb`
+alone does not activate its code in an already running service.
+
 ## Fedora service
 
 Install an RPM from CI or [build one locally](development.md#fedora-rpm):
