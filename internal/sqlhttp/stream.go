@@ -61,6 +61,12 @@ func canStream(rows pgx.Rows, types *pgtype.Map, rawText bool) bool {
 func streamSingle(w http.ResponseWriter, rows pgx.Rows, types *pgtype.Map, arrayMode, rawText bool, maxRowBytes, maxResponseBytes int64, lease *memoryLease, refuse func(http.ResponseWriter, error) bool) error {
 	defer rows.Close()
 	descriptions := rows.FieldDescriptions()
+	if err := lease.grow(resultMetadataCost(descriptions)); err != nil {
+		if refuse(w, err) {
+			return nil
+		}
+		return err
+	}
 	fields := fieldsFromDescriptions(descriptions)
 	kinds := cellKinds(descriptions, types, rawText)
 	firstRow := rows.Next()

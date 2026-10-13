@@ -12,3 +12,5 @@ BARNACLE_PG_SSLMODE=require
 # less 64 MiB (96 MiB for this unit), so raise MemoryMax and GOMEMLIMIT together
 # and leave this alone.
 # BARNACLE_HTTP_MAX_MEMORY_MIB=96
+# Keep Go's garbage collector below the systemd service memory ceiling.
+GOMEMLIMIT=160MiB

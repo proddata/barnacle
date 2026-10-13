@@ -28,10 +28,12 @@ var settingNames = []string{
 	"BARNACLE_HTTP_READ_TIMEOUT",
 	"BARNACLE_HTTP_STATEMENT_TIMEOUT",
 	"BARNACLE_LISTEN",
+	"BARNACLE_MAX_CLIENT_CONNECTIONS",
 	"BARNACLE_MAX_CONNECTIONS",
 	"BARNACLE_MAX_HTTP_QUERIES",
 	"BARNACLE_METRICS",
 	"BARNACLE_METRICS_LISTEN",
+	"BARNACLE_METRICS_MAX_CONNECTIONS",
 	"BARNACLE_PG_ADDR",
 	"BARNACLE_PG_ALLOWED_ADDRS",
 	"BARNACLE_PG_CA_FILE",
@@ -54,16 +56,18 @@ var settingNames = []string{
 // CA files, so -check-config can run it against a real deployment's
 // environment.
 type settings struct {
-	cfg               gateway.Config
-	httpReadTimeout   time.Duration
-	httpWriteTimeout  time.Duration
-	httpIdleTimeout   time.Duration
-	httpMemoryBytes   int64
-	httpMemorySource  string
-	metricsEnabled    bool
-	metricsListen     string
-	tlsConfig         *tls.Config
-	certificateReload *publicCertificateReloader
+	cfg                   gateway.Config
+	httpReadTimeout       time.Duration
+	httpWriteTimeout      time.Duration
+	httpIdleTimeout       time.Duration
+	httpMemoryBytes       int64
+	httpMemorySource      string
+	metricsEnabled        bool
+	metricsListen         string
+	maxClientConnections  int
+	metricsMaxConnections int
+	tlsConfig             *tls.Config
+	certificateReload     *publicCertificateReloader
 }
 
 // envReader collects every configuration problem so an operator sees them all
@@ -172,6 +176,8 @@ func loadSettings(lookup func(string) string, environ []string, strict bool) (*s
 	wsIdleTimeout := r.duration("BARNACLE_WS_IDLE_TIMEOUT", "30m", 1)
 	wsWriteTimeout := r.duration("BARNACLE_WS_WRITE_TIMEOUT", "30s", 1)
 	maxConnections := r.positiveInt("BARNACLE_MAX_CONNECTIONS", 32)
+	s.maxClientConnections = r.positiveInt("BARNACLE_MAX_CLIENT_CONNECTIONS", 256)
+	s.metricsMaxConnections = r.positiveInt("BARNACLE_METRICS_MAX_CONNECTIONS", 16)
 	maxHTTPQueries := r.positiveInt("BARNACLE_MAX_HTTP_QUERIES", 8)
 	if maxHTTPQueries > maxConnections {
 		r.failf("invalid BARNACLE_MAX_HTTP_QUERIES: exceeds BARNACLE_MAX_CONNECTIONS")

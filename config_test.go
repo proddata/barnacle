@@ -30,6 +30,9 @@ func TestLoadSettingsDefaults(t *testing.T) {
 	if cap(s.cfg.UpstreamSlots) != 32 || cap(s.cfg.HTTPSlots) != 8 || cap(s.cfg.CancelSlots) != 8 {
 		t.Fatal("unexpected default slot counts")
 	}
+	if s.maxClientConnections != 256 || s.metricsMaxConnections != 16 {
+		t.Fatal("unexpected listener connection limits")
+	}
 	if !s.metricsEnabled || s.metricsListen != "" || s.tlsConfig != nil {
 		t.Fatal("unexpected metrics or TLS defaults")
 	}
@@ -89,6 +92,10 @@ func TestLoadSettingsReportsEveryProblem(t *testing.T) {
 func TestLoadSettingsRejections(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"http queries above connections": {"BARNACLE_MAX_CONNECTIONS": "4", "BARNACLE_MAX_HTTP_QUERIES": "5"},
+		"zero client connections":        {"BARNACLE_MAX_CLIENT_CONNECTIONS": "0"},
+		"negative client connections":    {"BARNACLE_MAX_CLIENT_CONNECTIONS": "-1"},
+		"invalid metrics connections":    {"BARNACLE_METRICS_MAX_CONNECTIONS": "unlimited"},
+		"zero metrics connections":       {"BARNACLE_METRICS_MAX_CONNECTIONS": "0"},
 		"timeout overflow":               {"BARNACLE_QUERY_TIMEOUT": "2562047h47m16s"},
 		"memory overflow":                {"BARNACLE_HTTP_MAX_MEMORY_MIB": "9223372036854775807"},
 		"default outside allowlist":      {"BARNACLE_PG_ADDR": "10.0.0.1:5432", "BARNACLE_PG_ALLOWED_ADDRS": "10.0.0.2:5432"},
@@ -114,6 +121,19 @@ func TestLoadSettingsAcceptsBooleanCase(t *testing.T) {
 	}
 	if !s.cfg.AllowTrustLogin || s.metricsEnabled {
 		t.Fatal("boolean values not applied")
+	}
+}
+
+func TestLoadSettingsListenerLimits(t *testing.T) {
+	s, err := loadSettings(envMap(map[string]string{
+		"BARNACLE_MAX_CLIENT_CONNECTIONS":  "64",
+		"BARNACLE_METRICS_MAX_CONNECTIONS": "4",
+	}), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.maxClientConnections != 64 || s.metricsMaxConnections != 4 {
+		t.Fatal("configured listener limits not applied")
 	}
 }
 

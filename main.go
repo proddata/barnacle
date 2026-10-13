@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/proddata/barnacle/internal/gateway"
 	"github.com/proddata/barnacle/internal/pgws"
 	"github.com/proddata/barnacle/internal/sqlhttp"
 )
@@ -68,6 +69,7 @@ func main() {
 		slog.Error("failed to listen", "address", cfg.Listen, "error", err)
 		os.Exit(1)
 	}
+	mainListener = gateway.LimitListener(mainListener, s.maxClientConnections)
 	var metricsServer *http.Server
 	var metricsListener net.Listener
 	if metricsEnabled && metricsListen != "" {
@@ -77,6 +79,7 @@ func main() {
 			slog.Error("failed to listen for metrics", "address", metricsListen, "error", err)
 			os.Exit(1)
 		}
+		metricsListener = gateway.LimitListener(metricsListener, s.metricsMaxConnections)
 		metricsMux := http.NewServeMux()
 		metricsMux.HandleFunc("GET /metrics", cfg.Metrics.Serve)
 		metricsServer = &http.Server{
@@ -121,10 +124,10 @@ func main() {
 		go func() { serveResults <- server.Serve(mainListener) }()
 	}
 	slog.Info("buffered HTTP result memory budget", "mib", httpMemoryBytes>>20, "source", httpMemorySource)
-	slog.Info("barnacle listening", "address", mainListener.Addr().String(), "postgres", cfg.PGAddr, "tls", server.TLSConfig != nil)
+	slog.Info("barnacle listening", "address", mainListener.Addr().String(), "postgres", cfg.PGAddr, "tls", server.TLSConfig != nil, "max_client_connections", s.maxClientConnections)
 	if metricsServer != nil {
 		go func() { serveResults <- metricsServer.Serve(metricsListener) }()
-		slog.Info("metrics listening", "address", metricsListener.Addr().String())
+		slog.Info("metrics listening", "address", metricsListener.Addr().String(), "max_connections", s.metricsMaxConnections)
 	}
 	serveErr := <-serveResults
 	interrupted := ctx.Err() != nil

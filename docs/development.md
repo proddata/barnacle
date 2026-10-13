@@ -15,6 +15,11 @@ The workflow checks that the tag matches the spec version. It creates determinis
 
 Each asset has a versioned download URL, for example `https://github.com/proddata/barnacle/releases/download/vX.Y.Z/barnacle-X.Y.Z.tar.gz` and `https://github.com/proddata/barnacle/releases/download/vX.Y.Z/barnacle-X.Y.Z-vendor.tar.gz`. Package builders can pin the published SHA256 values from `SHA256SUMS`. To keep released asset bytes and tags from being replaced, [enable GitHub release immutability](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/prevent-release-changes) for the repository before the first tagged release. The workflow creates the release with all assets attached before it is published. A rerun must not replace an existing published release; issue a new version for corrections.
 
+Publication also requires the full [CI workflow](../.github/workflows/ci.yml),
+called directly by the release workflow on the tagged commit. Release builds
+and validation run in parallel; publishing waits for both to succeed. This
+reuses the ordinary integration, package, and regression checks for each release.
+
 ## Release binaries, container, and Debian package
 
 The default [Dockerfile](../Dockerfile) builds Barnacle from source but has no Go toolchain in its runtime stage. For a release built from one tested set of static Linux binaries, run:

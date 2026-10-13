@@ -638,6 +638,9 @@ func collect(ctx context.Context, rows pgx.Rows, types *pgtype.Map, arrayMode, r
 		}
 	}()
 	descriptions := rows.FieldDescriptions()
+	if err := lease.grow(resultMetadataCost(descriptions)); err != nil {
+		return result{}, err
+	}
 	fields := fieldsFromDescriptions(descriptions)
 	data := make([]any, 0)
 	truncated := false

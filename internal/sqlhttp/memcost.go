@@ -97,6 +97,21 @@ func nestedKind(kind cellKind, v []byte) cellKind {
 	return kind
 }
 
+// resultMetadataCost accounts for result and column containers, retained field
+// names, and the copies JSON encoding makes. Empty results still hold this
+// memory, and a batch retains every query's fields until the response is sent.
+// The fixed JSON allowance covers field keys and the largest numeric values;
+// a name byte may expand to six bytes when escaped. As with bufferedRowCost,
+// reserve three copies of the encoding, before building the response fields.
+func resultMetadataCost(descriptions []pgconn.FieldDescription) int64 {
+	cost := int64(512) // Result containers and the fixed JSON envelope.
+	for _, description := range descriptions {
+		nameBytes := int64(len(description.Name))
+		cost += 128 + nameBytes + 3*(192+6*nameBytes)
+	}
+	return cost
+}
+
 // streamRowCost estimates the transient heap one streamed row needs. Text is
 // escaped in fixed-size chunks and JSON passes through, but an array column is
 // parsed into Go values and re-encoded as a whole, which is far larger than its
