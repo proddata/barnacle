@@ -1,5 +1,5 @@
 Name:           barnacle
-Version:        0.2.1
+Version:        0.2.2
 Release:        1%{?dist}
 %global debug_package %{nil}
 Summary:        HTTP and WebSocket proxy for PostgreSQL
@@ -58,6 +58,12 @@ done
 %config(noreplace) %{_sysconfdir}/sysconfig/barnacle
 
 %changelog
+* Tue Oct 13 2026 Barnacle contributors - 0.2.2-1
+- Bound incoming main and separate metrics TCP connections, including WebSockets
+- Account for result metadata in the shared HTTP memory budget
+- Set Debian's Go memory limit to match the RPM memory profile
+- Require full CI validation before publishing release artifacts
+
 * Mon Oct 12 2026 Barnacle contributors - 0.2.1-1
 - Republish 0.2.0 as 0.2.1: the 0.2.0 release was withdrawn and its tag cannot be reused
 - No functional changes from 0.2.0
