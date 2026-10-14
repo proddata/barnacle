@@ -8,7 +8,10 @@ Summary:        HTTP and WebSocket proxy for PostgreSQL
 License:        Apache-2.0 AND MIT AND BSD-3-Clause AND ISC
 Source0:        %{name}-%{version}.tar.gz
 Source1:        %{name}-%{version}-vendor.tar.gz
-BuildRequires:  golang >= 1.26.9
+# The Go version is enforced by go.mod: GOTOOLCHAIN=local makes the build fail
+# if the Go on PATH is older than it requires. Older Fedora releases need the
+# upstream toolchain first on PATH.
+BuildRequires:  golang
 BuildRequires:  systemd-rpm-macros
 
 %description

@@ -212,10 +212,14 @@ jobs:
     name: Fedora ${{ matrix.fedora }} RPM (${{ matrix.arch }})
     strategy:
       fail-fast: false
-      # The spec needs golang >= 1.26.9, which Fedora 43 does not ship. Add
-      # the previous release again once it does.
+      # Fedora 42 and 43 ship an older Go than go.mod requires, so the pinned
+      # toolchain from setup-go goes first on PATH; the spec builds with it.
       matrix:
         include:
+          - { fedora: '42', arch: x86_64, runner: ubuntu-24.04 }
+          - { fedora: '42', arch: aarch64, runner: ubuntu-24.04-arm }
+          - { fedora: '43', arch: x86_64, runner: ubuntu-24.04 }
+          - { fedora: '43', arch: aarch64, runner: ubuntu-24.04-arm }
           - { fedora: '44', arch: x86_64, runner: ubuntu-24.04 }
           - { fedora: '44', arch: aarch64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.runner }}
@@ -235,6 +239,9 @@ jobs:
     steps:
       - run: dnf install -y golang nodejs npm git tar gzip rpm-build systemd-rpm-macros systemd curl
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - name: Build Fedora RPM
         run: ./packaging/rpm/build.sh
       - name: Inspect RPM contents
@@ -251,6 +258,10 @@ jobs:
           dnf install -y dist/barnacle-*.rpm
           rpm -V barnacle
           systemd-analyze verify barnacle.service
+      - name: Scan installed RPM binary
+        env:
+          GOTOOLCHAIN: local
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary /usr/bin/barnacle
       - run: npm ci --prefix integration
       - name: Query through installed RPM
         env:
