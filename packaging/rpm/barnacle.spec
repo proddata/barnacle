@@ -8,7 +8,7 @@ Summary:        HTTP and WebSocket proxy for PostgreSQL
 License:        Apache-2.0 AND MIT AND BSD-3-Clause AND ISC
 Source0:        %{name}-%{version}.tar.gz
 Source1:        %{name}-%{version}-vendor.tar.gz
-BuildRequires:  golang >= 1.26.9
+BuildRequires:  golang >= 1.26.4
 BuildRequires:  systemd-rpm-macros
 
 %description

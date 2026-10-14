@@ -34,7 +34,7 @@ Use the matching architecture for a local container build. [Dockerfile.release](
 
 ## Fedora RPM
 
-Build a local RPM on Fedora with Go 1.26.9 or newer:
+Build a local RPM on Fedora with Go 1.26.4 or newer:
 
 ```sh
 sudo dnf install golang rpm-build systemd-rpm-macros
@@ -43,9 +43,9 @@ sudo dnf install golang rpm-build systemd-rpm-macros
 
 `build.sh` creates a source tarball and a separate `go mod vendor` tarball. The latter may require access to the Go module cache or network while preparing the sources; `rpmbuild` then builds and tests with `-mod=vendor` and `GOTOOLCHAIN=local`, so its build root needs no module or toolchain download. The browser console is not included in either the source archive or the RPM. All `THIRD-PARTY-*` notices and licenses remain in the installed package.
 
-The spec requires the system `golang` RPM to provide Go 1.26.9 or newer. Use an updated [Fedora 44 build root](https://packages.fedoraproject.org/pkgs/golang/golang/fedora-44.html) with a `golang` RPM that meets this minimum. For a pinned older build root, provide a newer `golang` RPM in its configured repository before resolving `BuildRequires`; installing an upstream Go tarball alone does not satisfy the RPM dependency. Check with `dnf repoquery --latest-limit=1 --qf '%{version}' golang` before building.
+The spec requires the system `golang` RPM to provide Go 1.26.4 or newer, which updated Fedora 42, 43 and 44 build roots ship. For a pinned older build root, provide a newer `golang` RPM in its configured repository before resolving `BuildRequires`; installing an upstream Go tarball alone does not satisfy the RPM dependency. Check with `dnf repoquery --latest-limit=1 --qf '%{version}' golang` before building. Release binaries and container images are built with the newer toolchain pinned in `go.mod`, not the Fedora one.
 
-CI builds, installs, and smoke-tests x86_64 and aarch64 RPMs in Fedora 44 containers, then uploads both artifacts. It also runs the arm64 package under systemd with the opt-in fixed-user key-access variant. With Docker available, run that systemd test in a disposable Fedora container:
+CI builds, installs, and smoke-tests x86_64 and aarch64 RPMs in Fedora 42, 43 and 44 containers, then uploads the artifacts. It also runs the arm64 package under systemd with the opt-in fixed-user key-access variant. With Docker available, run that systemd test in a disposable Fedora container:
 
 ```sh
 ./integration/fedora-service/run.sh dist/barnacle-*.rpm
