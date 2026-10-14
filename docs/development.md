@@ -34,7 +34,7 @@ Use the matching architecture for a local container build. [Dockerfile.release](
 
 ## Fedora RPM
 
-Build a local RPM on Fedora with Go 1.26.9 or newer:
+Build a local RPM on Fedora with Go 1.26.9 or newer on `PATH`:
 
 ```sh
 sudo dnf install golang rpm-build systemd-rpm-macros
@@ -43,9 +43,9 @@ sudo dnf install golang rpm-build systemd-rpm-macros
 
 `build.sh` creates a source tarball and a separate `go mod vendor` tarball. The latter may require access to the Go module cache or network while preparing the sources; `rpmbuild` then builds and tests with `-mod=vendor` and `GOTOOLCHAIN=local`, so its build root needs no module or toolchain download. The browser console is not included in either the source archive or the RPM. All `THIRD-PARTY-*` notices and licenses remain in the installed package.
 
-The spec requires the system `golang` RPM to provide Go 1.26.9 or newer. Use an updated [Fedora 44 build root](https://packages.fedoraproject.org/pkgs/golang/golang/fedora-44.html) with a `golang` RPM that meets this minimum. For a pinned older build root, provide a newer `golang` RPM in its configured repository before resolving `BuildRequires`; installing an upstream Go tarball alone does not satisfy the RPM dependency. Check with `dnf repoquery --latest-limit=1 --qf '%{version}' golang` before building.
+The spec only requires some `golang` RPM; `go.mod` sets the real minimum, and `GOTOOLCHAIN=local` makes the build fail if the Go on `PATH` is older. Fedora 44 ships a new enough Go. On Fedora 42 and 43, install the `golang` RPM to satisfy `BuildRequires`, then put an [upstream Go](https://go.dev/dl/) matching `go.mod` first on `PATH` before running `build.sh`. CI and the release workflow do this with `actions/setup-go`, so the RPMs are built and scanned with the same toolchain as the release binaries.
 
-CI builds, installs, and smoke-tests x86_64 and aarch64 RPMs in Fedora 44 containers, then uploads both artifacts. It also runs the arm64 package under systemd with the opt-in fixed-user key-access variant. With Docker available, run that systemd test in a disposable Fedora container:
+CI builds, installs, and smoke-tests x86_64 and aarch64 RPMs in Fedora 42, 43 and 44 containers, scans the installed binary with `govulncheck`, then uploads the artifacts. It also runs the arm64 package under systemd with the opt-in fixed-user key-access variant. With Docker available, run that systemd test in a disposable Fedora container:
 
 ```sh
 ./integration/fedora-service/run.sh dist/barnacle-*.rpm
@@ -55,7 +55,7 @@ This local test uses a privileged container with its own cgroup namespace. It ch
 
 ### Packaging for a distribution or vendor
 
-A packager who builds Barnacle in their own pipeline should start from [the RPM spec](../packaging/rpm/barnacle.spec) and the two published source archives, not from a copy of an older release. The fields they normally set are `Epoch`, the `Release` suffix, `Vendor`, and `URL` (pin it to the release tag); everything else, including the Go requirement, the license line and the hardened PIE build, should stay as released. When you move to a newer Barnacle version, take that release's spec again: the license line and `BuildRequires: golang` change between releases (for example when a dependency is added), and a stale copy then misdescribes the package.
+A packager who builds Barnacle in their own pipeline should start from [the RPM spec](../packaging/rpm/barnacle.spec) and the two published source archives, not from a copy of an older release. The fields they normally set are `Epoch`, the `Release` suffix, `Vendor`, and `URL` (pin it to the release tag); everything else, including the license line and the hardened PIE build, should stay as released. When you move to a newer Barnacle version, take that release's spec again: the license line and the Go minimum change between releases (for example when a dependency is added), and a stale copy then misdescribes the package.
 
 ## Test and inspect
 

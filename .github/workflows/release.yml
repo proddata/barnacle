@@ -99,6 +99,9 @@ jobs:
     steps:
       - run: dnf install -y golang git python3 rpm-build systemd-rpm-macros tar gzip
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - uses: actions/download-artifact@v8
         with:
           name: release-sources
